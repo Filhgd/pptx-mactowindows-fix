@@ -50,7 +50,7 @@ struct ZipEntry {
             raw = deflated
         }
         let (t, d) = template.map { ($0.modTime, $0.modDate) } ?? DosTime.now()
-        return ZipEntry(name: name, method: method, flags: 0x0800 & (template?.flags ?? 0x0800),
+        return ZipEntry(name: name, method: method, flags: 0,
                         modTime: t, modDate: d, crc32: crc, uncompressedSize: contents.count,
                         externalAttributes: template?.externalAttributes ?? 0, rawData: raw)
     }
@@ -121,7 +121,8 @@ enum ZipArchive {
                 throw ZipError.unsupported("bestanden groter dan 4 GB")
             }
             // Sizes are written in the header, so no data descriptor (bit 3 cleared).
-            let flags = (e.flags & ~UInt16(0x0008)) | (nameBytes.contains { $0 >= 0x80 } ? 0x0800 : 0)
+            let utf8Flag: UInt16 = nameBytes.contains(where: { $0 >= 0x80 }) ? 0x0800 : 0
+            let flags: UInt16 = (e.flags & 0xFFF7) | utf8Flag
             let offset = UInt32(out.count)
             out.put32(0x04034b50); out.put16(20); out.put16(flags); out.put16(e.method)
             out.put16(e.modTime); out.put16(e.modDate); out.put32(e.crc32)
@@ -181,13 +182,19 @@ enum Deflate {
 enum CRC32 {
     private static let table: [UInt32] = (0..<256).map { i -> UInt32 in
         var c = UInt32(i)
-        for _ in 0..<8 { c = (c & 1) != 0 ? (0xEDB8_8320 ^ (c >> 1)) : (c >> 1) }
+        for _ in 0..<8 {
+            let shifted: UInt32 = c >> 1
+            c = (c & 1) != 0 ? (0xEDB8_8320 ^ shifted) : shifted
+        }
         return c
     }
 
     static func checksum(_ bytes: [UInt8]) -> UInt32 {
         var c: UInt32 = 0xFFFF_FFFF
-        for b in bytes { c = table[Int((c ^ UInt32(b)) & 0xFF)] ^ (c >> 8) }
+        for b in bytes {
+            let index: Int = Int((c ^ UInt32(b)) & 0xFF)
+            c = table[index] ^ (c >> 8)
+        }
         return c ^ 0xFFFF_FFFF
     }
 }
@@ -195,16 +202,30 @@ enum CRC32 {
 enum DosTime {
     static func now() -> (UInt16, UInt16) {
         let c = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day, .hour, .minute, .second], from: Date())
-        let time = UInt16((c.hour ?? 0) << 11 | (c.minute ?? 0) << 5 | (c.second ?? 0) / 2)
-        let date = UInt16(max(0, (c.year ?? 1980) - 1980) << 9 | (c.month ?? 1) << 5 | (c.day ?? 1))
-        return (time, date)
+        let hour: Int = c.hour ?? 0
+        let minute: Int = c.minute ?? 0
+        let second: Int = c.second ?? 0
+        let year: Int = max(0, (c.year ?? 1980) - 1980)
+        let month: Int = c.month ?? 1
+        let day: Int = c.day ?? 1
+        let time: Int = (hour << 11) | (minute << 5) | (second / 2)
+        let date: Int = (year << 9) | (month << 5) | day
+        return (UInt16(truncatingIfNeeded: time), UInt16(truncatingIfNeeded: date))
     }
 }
 
 extension Array where Element == UInt8 {
-    func u16(_ o: Int) -> UInt16 { UInt16(self[o]) | UInt16(self[o + 1]) << 8 }
+    func u16(_ o: Int) -> UInt16 {
+        let lo: UInt16 = UInt16(self[o])
+        let hi: UInt16 = UInt16(self[o + 1]) << 8
+        return lo | hi
+    }
     func u32(_ o: Int) -> UInt32 {
-        UInt32(self[o]) | UInt32(self[o + 1]) << 8 | UInt32(self[o + 2]) << 16 | UInt32(self[o + 3]) << 24
+        let b0: UInt32 = UInt32(self[o])
+        let b1: UInt32 = UInt32(self[o + 1]) << 8
+        let b2: UInt32 = UInt32(self[o + 2]) << 16
+        let b3: UInt32 = UInt32(self[o + 3]) << 24
+        return b0 | b1 | b2 | b3
     }
     mutating func put16(_ v: UInt16) { append(UInt8(v & 0xFF)); append(UInt8(v >> 8)) }
     mutating func put32(_ v: UInt32) {
