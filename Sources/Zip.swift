@@ -11,9 +11,9 @@ enum ZipError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .notZip: return "Dit is geen geldig PowerPoint-bestand (.pptx)."
-        case .unsupported(let s): return "Niet ondersteund: \(s)"
-        case .corrupt(let s): return "Beschadigd bestand: \(s)"
+        case .notZip: return "This is not a valid PowerPoint file (.pptx)."
+        case .unsupported(let s): return "Not supported: \(s)"
+        case .corrupt(let s): return "Damaged file: \(s)"
         }
     }
 }
@@ -36,7 +36,7 @@ struct ZipEntry {
         case 8:
             return try Deflate.inflate(rawData, expectedSize: uncompressedSize, name: name)
         default:
-            throw ZipError.unsupported("compressiemethode \(method) in \(name)")
+            throw ZipError.unsupported("compression method \(method) in \(name)")
         }
     }
 
@@ -72,13 +72,13 @@ enum ZipArchive {
         let count = Int(bytes.u16(eocd + 10))
         let cdOffset = Int(bytes.u32(eocd + 16))
         if count == 0xFFFF || cdOffset == 0xFFFF_FFFF {
-            throw ZipError.unsupported("ZIP64-bestanden (groter dan 4 GB)")
+            throw ZipError.unsupported("ZIP64 files (larger than 4 GB)")
         }
 
         var entries: [ZipEntry] = []
         var p = cdOffset
         for _ in 0..<count {
-            guard p + 46 <= n, bytes.u32(p) == 0x02014b50 else { throw ZipError.corrupt("centrale map") }
+            guard p + 46 <= n, bytes.u32(p) == 0x02014b50 else { throw ZipError.corrupt("central directory") }
             let flags = bytes.u16(p + 8)
             let method = bytes.u16(p + 10)
             let time = bytes.u16(p + 12)
@@ -91,19 +91,19 @@ enum ZipArchive {
             let commentLen = Int(bytes.u16(p + 32))
             let ext = bytes.u32(p + 38)
             let local = Int(bytes.u32(p + 42))
-            guard p + 46 + nameLen <= n else { throw ZipError.corrupt("naam") }
+            guard p + 46 + nameLen <= n else { throw ZipError.corrupt("file name") }
             let nameBytes = Array(bytes[(p + 46)..<(p + 46 + nameLen)])
             let name = String(bytes: nameBytes, encoding: .utf8)
                 ?? String(bytes: nameBytes, encoding: .isoLatin1) ?? ""
-            if flags & 0x0001 != 0 { throw ZipError.unsupported("versleutelde bestanden") }
+            if flags & 0x0001 != 0 { throw ZipError.unsupported("encrypted files") }
             if csize == 0xFFFF_FFFF || usize == 0xFFFF_FFFF || local == 0xFFFF_FFFF {
-                throw ZipError.unsupported("ZIP64-bestanden (groter dan 4 GB)")
+                throw ZipError.unsupported("ZIP64 files (larger than 4 GB)")
             }
-            guard local + 30 <= n, bytes.u32(local) == 0x04034b50 else { throw ZipError.corrupt("lokale kop van \(name)") }
+            guard local + 30 <= n, bytes.u32(local) == 0x04034b50 else { throw ZipError.corrupt("local header of \(name)") }
             let lName = Int(bytes.u16(local + 26))
             let lExtra = Int(bytes.u16(local + 28))
             let start = local + 30 + lName + lExtra
-            guard start + csize <= n else { throw ZipError.corrupt("gegevens van \(name)") }
+            guard start + csize <= n else { throw ZipError.corrupt("data of \(name)") }
             entries.append(ZipEntry(name: name, method: method, flags: flags, modTime: time, modDate: date,
                                     crc32: crc, uncompressedSize: usize, externalAttributes: ext,
                                     rawData: Array(bytes[start..<(start + csize)])))
@@ -118,7 +118,7 @@ enum ZipArchive {
         for e in entries {
             let nameBytes = Array(e.name.utf8)
             guard out.count < 0xFFFF_FFFF, e.rawData.count < 0xFFFF_FFFF, e.uncompressedSize < 0xFFFF_FFFF else {
-                throw ZipError.unsupported("bestanden groter dan 4 GB")
+                throw ZipError.unsupported("files larger than 4 GB")
             }
             // Sizes are written in the header, so no data descriptor (bit 3 cleared).
             let utf8Flag: UInt16 = nameBytes.contains(where: { $0 >= 0x80 }) ? 0x0800 : 0
@@ -139,7 +139,7 @@ enum ZipArchive {
             central += nameBytes
         }
         guard entries.count < 0xFFFF, out.count + central.count < 0xFFFF_FFFF else {
-            throw ZipError.unsupported("te veel of te grote onderdelen")
+            throw ZipError.unsupported("too many or too large parts")
         }
         let cdOffset = UInt32(out.count)
         out += central

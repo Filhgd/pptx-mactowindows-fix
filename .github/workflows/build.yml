@@ -16,7 +16,7 @@ jobs:
   build:
     runs-on: macos-14
     env:
-      # Same secrets as the AutoSign repo. Without them the app is only ad-hoc signed.
+      # Optional. Without them the app is only ad-hoc signed.
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
       MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
       APPLE_ID: ${{ secrets.APPLE_ID }}

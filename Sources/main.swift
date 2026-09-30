@@ -29,7 +29,7 @@ func fileSize(_ url: URL) -> Int? {
 }
 
 func summary(_ fixed: [FixedImage]) -> String {
-    fixed.count == 1 ? "1 afbeelding verscherpt" : "\(fixed.count) afbeeldingen verscherpt"
+    fixed.count == 1 ? "1 image sharpened" : "\(fixed.count) images sharpened"
 }
 
 // MARK: - Command line (used by the tests)
@@ -41,16 +41,31 @@ if args.count >= 3, args[1] == "--fix" {
     do {
         let fixed = try PPTXFixer.fix(input: input, output: output)
         if fixed.isEmpty {
-            print("niets te repareren")
+            print("nothing to fix")
         } else {
             for f in fixed { print("\(f.oldPath) -> \(f.newPath) \(f.width)x\(f.height)") }
             print("output: \(output.path)")
         }
         exit(0)
     } catch {
-        FileHandle.standardError.write("fout: \(error)\n".data(using: .utf8)!)
+        FileHandle.standardError.write("error: \(error)\n".data(using: .utf8)!)
         exit(1)
     }
+}
+if args.count >= 3, args[1] == "--fix-all" {
+    // Same as dropping several files at once: each gets name_windows.pptx next to it.
+    var failures = 0
+    for path in args.dropFirst(2) {
+        let input = URL(fileURLWithPath: path)
+        do {
+            let fixed = try PPTXFixer.fix(input: input, output: outputURL(for: input))
+            print("\(input.lastPathComponent): " + (fixed.isEmpty ? "nothing to fix" : summary(fixed)))
+        } catch {
+            failures += 1
+            print("\(input.lastPathComponent): failed: \(error)")
+        }
+    }
+    exit(failures == 0 ? 0 : 1)
 }
 if args.count >= 2, args[1] == "--version" {
     print(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
@@ -67,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var stream: FSEventStreamRef?
     private var pendingScan: DispatchWorkItem?
     private var openedWithFiles = false
-    private var lastResult = "Nog niets gerepareerd"
+    private var lastResult = "Nothing fixed yet"
     private let defaults = UserDefaults.standard
 
     // Only touched on the work queue.
@@ -90,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: appName)
             button.image?.isTemplate = true
-            button.toolTip = "\(appName): sleep hier een presentatie op"
+            button.toolTip = "\(appName): drop a presentation here"
             button.window?.registerForDraggedTypes([.fileURL])
             button.window?.delegate = self
         }
@@ -113,26 +128,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
-        menu.addItem(info("Sleep een presentatie op het icoon hierboven"))
-        menu.addItem(item("Presentatie repareren…", #selector(chooseFiles)))
+        menu.addItem(info("Drop a presentation on the icon above"))
+        menu.addItem(item("Fix Presentation…", #selector(chooseFiles)))
         menu.addItem(.separator())
         if let folder = watchFolder {
-            menu.addItem(info("Bewaakte map: \(folder.lastPathComponent)"))
-            menu.addItem(item("Map tonen in Finder", #selector(revealFolder)))
-            menu.addItem(item("Andere map kiezen…", #selector(chooseFolder)))
-            menu.addItem(item("Stop met bewaken", #selector(stopWatchingFolder)))
+            menu.addItem(info("Watched folder: \(folder.lastPathComponent)"))
+            menu.addItem(item("Show Folder in Finder", #selector(revealFolder)))
+            menu.addItem(item("Choose Another Folder…", #selector(chooseFolder)))
+            menu.addItem(item("Stop Watching", #selector(stopWatchingFolder)))
         } else {
-            menu.addItem(info("Geen bewaakte map"))
-            menu.addItem(item("Map kiezen om automatisch te repareren…", #selector(chooseFolder)))
+            menu.addItem(info("No watched folder"))
+            menu.addItem(item("Choose Folder to Fix Automatically…", #selector(chooseFolder)))
         }
         menu.addItem(.separator())
-        let login = item("Starten bij inloggen", #selector(toggleLogin))
+        let login = item("Open at Login", #selector(toggleLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
-        menu.addItem(info("Laatste: \(lastResult)"))
+        menu.addItem(info("Last: \(lastResult)"))
         menu.addItem(.separator())
-        menu.addItem(item("Over \(appName)", #selector(about)))
-        menu.addItem(item("Stop", #selector(quit), key: "q"))
+        menu.addItem(item("About \(appName)", #selector(about)))
+        menu.addItem(item("Quit", #selector(quit), key: "q"))
     }
 
     private func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
@@ -152,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         if let t = UTType(filenameExtension: "pptx") { panel.allowedContentTypes = [t] }
-        panel.message = "Kies de presentaties die je op Windows wilt tonen."
+        panel.message = "Choose the presentations you want to show on Windows."
         NSApp.activate(ignoringOtherApps: true)
         if panel.runModal() == .OK { fixManually(panel.urls) }
     }
@@ -162,8 +177,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
-        panel.prompt = "Bewaak deze map"
-        panel.message = "Elke presentatie in deze map (en submappen) krijgt automatisch een Windows-versie ernaast."
+        panel.prompt = "Watch This Folder"
+        panel.message = "Every presentation in this folder (and its subfolders) automatically gets a Windows version next to it."
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
         watchFolder = url
@@ -184,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         do {
             if service.status == .enabled { try service.unregister() } else { try service.register() }
         } catch {
-            alert("Starten bij inloggen kon niet ingesteld worden", "\(error.localizedDescription)\n\nJe kan het ook zelf aanzetten in Systeeminstellingen > Algemeen > Inlogonderdelen.")
+            alert("Open at Login could not be set", "\(error.localizedDescription)\n\nYou can also turn it on in System Settings > General > Login Items.")
             SMAppService.openSystemSettingsLoginItems()
         }
         if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
@@ -193,7 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     @objc private func about() {
         NSApp.activate(ignoringOtherApps: true)
         NSApp.orderFrontStandardAboutPanel(options: [
-            .credits: NSAttributedString(string: "Maakt geplakte PDF-knipsels en afbeeldingen uit PowerPoint voor Mac scherp op Windows. Je origineel blijft ongewijzigd; de Windows-versie krijgt \"\(outputSuffix)\" in de naam.")
+            .credits: NSAttributedString(string: "Makes PDF clips pasted in PowerPoint for Mac sharp on Windows. Your original is never changed; the Windows version gets \"\(outputSuffix)\" in its name.")
         ])
     }
 
@@ -203,17 +218,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         defaults.set(true, forKey: "welcomeShown")
         NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
-        a.messageText = "\(appName) staat nu in de menubalk"
+        a.messageText = "\(appName) is now in the menu bar"
         a.informativeText = """
-        Je vindt het toverstaf-icoon rechtsboven in je scherm.
+        Look for the magic wand icon at the top right of your screen.
 
-        Sleep een presentatie op dat icoon, of kies een map: elke presentatie die daarin komt, krijgt dan automatisch een scherpe Windows-versie ernaast (naam\(outputSuffix).pptx). Je origineel blijft ongewijzigd.
+        Drop one or more presentations (or a folder) on that icon, or choose a folder to watch: every presentation that lands there automatically gets a sharp Windows version next to it (name\(outputSuffix).pptx). Your original is never changed.
         """
-        let login = NSButton(checkboxWithTitle: "Starten bij inloggen", target: nil, action: nil)
+        let login = NSButton(checkboxWithTitle: "Open at login", target: nil, action: nil)
         login.state = .on
         a.accessoryView = login
-        a.addButton(withTitle: "Map kiezen…")
-        a.addButton(withTitle: "Later")
+        a.addButton(withTitle: "Choose Folder…")
+        a.addButton(withTitle: "Not Now")
         let answer = a.runModal()
         if login.state == .on, SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
         if answer == .alertFirstButtonReturn { chooseFolder() }
@@ -263,31 +278,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private func fixManually(_ urls: [URL]) {
         let files = expand(urls)
         if files.isEmpty {
-            notify("Geen presentatie gevonden", "Sleep een .pptx-bestand (niet een bestand dat al op \(outputSuffix) eindigt).", path: nil, fallbackAlert: true)
+            notify("No presentation found", "Drop a .pptx file (not one that already ends in \(outputSuffix)).", path: nil, fallbackAlert: true)
             return
         }
         work.async { [weak self] in
             guard let self else { return }
+            var done: [(output: URL, images: Int)] = []
+            var nothing: [String] = []
+            var failed: [String] = []
             for file in files {
                 let out = outputURL(for: file)
                 do {
                     let fixed = try PPTXFixer.fix(input: file, output: out)
-                    DispatchQueue.main.async {
-                        if fixed.isEmpty {
-                            self.lastResult = "\(file.lastPathComponent): niets te repareren"
-                            self.notify("Niets te repareren", "\(file.lastPathComponent) bevat geen Mac-afbeeldingen die op Windows wazig worden.", path: nil, fallbackAlert: true)
-                        } else {
-                            self.lastResult = "\(out.lastPathComponent) (\(summary(fixed)))"
-                            self.notify("Windows-versie klaar", "\(out.lastPathComponent): \(summary(fixed)).", path: out.path, fallbackAlert: true)
-                        }
-                    }
+                    if fixed.isEmpty { nothing.append(file.lastPathComponent) } else { done.append((out, fixed.count)) }
                 } catch {
-                    DispatchQueue.main.async {
-                        self.lastResult = "\(file.lastPathComponent): mislukt"
-                        self.notify("Repareren mislukt", "\(file.lastPathComponent): \(error)", path: nil, fallbackAlert: true)
-                    }
+                    failed.append("\(file.lastPathComponent): \(error)")
                 }
             }
+            DispatchQueue.main.async { self.report(done: done, nothing: nothing, failed: failed) }
+        }
+    }
+
+    /// One message per drop, however many files it contained.
+    private func report(done: [(output: URL, images: Int)], nothing: [String], failed: [String]) {
+        let total = done.count + nothing.count + failed.count
+        let images = done.reduce(0) { $0 + $1.images }
+        let imageText = images == 1 ? "1 image sharpened" : "\(images) images sharpened"
+
+        if total == 1 {
+            if let d = done.first {
+                lastResult = "\(d.output.lastPathComponent) (\(imageText))"
+                notify("Windows version ready", "\(d.output.lastPathComponent): \(imageText).", path: d.output.path, fallbackAlert: true)
+            } else if let n = nothing.first {
+                lastResult = "\(n): nothing to fix"
+                notify("Nothing to fix", "\(n) has no Mac images that turn blurry on Windows.", path: nil, fallbackAlert: true)
+            } else if let f = failed.first {
+                lastResult = "fixing failed"
+                notify("Fixing failed", f, path: nil, fallbackAlert: true)
+            }
+            return
+        }
+
+        var lines: [String] = []
+        if !done.isEmpty { lines.append("\(done.count) Windows version\(done.count == 1 ? "" : "s") created (\(imageText)).") }
+        if !nothing.isEmpty { lines.append("\(nothing.count) had nothing to fix.") }
+        if !failed.isEmpty { lines.append("\(failed.count) failed.") }
+        lastResult = "\(done.count) of \(total) presentations fixed"
+        let title = failed.isEmpty ? "\(total) presentations processed" : "\(total) presentations processed, \(failed.count) failed"
+        notify(title, lines.joined(separator: " "), path: done.first?.output.path, fallbackAlert: failed.isEmpty)
+        if !failed.isEmpty {
+            // Failures in a batch get a window, so the reasons can be read.
+            alert(title, (lines + [""] + failed).joined(separator: "\n"), reveal: done.first?.output.path)
         }
     }
 
@@ -333,15 +374,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     /// Runs on the work queue.
     private func scan(_ folder: URL) {
         var retryLater = false
+        var done: [(output: URL, images: Int)] = []
+        var failed: [String] = []
+        // Presentations that are new or changed since their Windows version was made.
+        var todo: [(file: URL, mtime: Double, size: Int?)] = []
         for file in expand([folder]) {
             guard let mtime = modificationDate(file)?.timeIntervalSince1970 else { continue }
-            let out = outputURL(for: file)
-            if let outTime = modificationDate(out)?.timeIntervalSince1970, outTime >= mtime { continue }
+            if let outTime = modificationDate(outputURL(for: file))?.timeIntervalSince1970, outTime >= mtime { continue }
             if skipped[file.path] == mtime { continue }
+            todo.append((file, mtime, fileSize(file)))
+        }
+        // Wait until PowerPoint, OneDrive or iCloud has finished writing (one wait for all).
+        if !todo.isEmpty { Thread.sleep(forTimeInterval: 2) }
 
-            // Wait until PowerPoint, OneDrive or iCloud has finished writing.
-            let size = fileSize(file)
-            Thread.sleep(forTimeInterval: 2)
+        for (file, mtime, size) in todo {
+            let out = outputURL(for: file)
             guard fileSize(file) == size, modificationDate(file)?.timeIntervalSince1970 == mtime else {
                 retryLater = true
                 continue
@@ -353,18 +400,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                     skipped[file.path] = mtime
                 } else {
                     skipped[file.path] = nil
-                    DispatchQueue.main.async {
-                        self.lastResult = "\(out.lastPathComponent) (\(summary(fixed)))"
-                        self.notify("Windows-versie klaar", "\(out.lastPathComponent): \(summary(fixed)).", path: out.path, fallbackAlert: false)
-                    }
+                    done.append((out, fixed.count))
                 }
             } catch {
                 skipped[file.path] = mtime   // try again once the file changes
-                DispatchQueue.main.async {
-                    self.lastResult = "\(file.lastPathComponent): mislukt"
-                    self.notify("Repareren mislukt", "\(file.lastPathComponent): \(error)", path: nil, fallbackAlert: false)
-                }
+                failed.append("\(file.lastPathComponent): \(error)")
             }
+        }
+        if !done.isEmpty || !failed.isEmpty {
+            let d = done, f = failed
+            DispatchQueue.main.async { self.reportWatched(done: d, failed: f) }
         }
         // Forget files that no longer exist, then save.
         skipped = skipped.filter { FileManager.default.fileExists(atPath: $0.key) }
@@ -373,6 +418,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self.defaults.set(snapshot, forKey: "skipped")
             if retryLater { self.scheduleScan(after: 5) }
         }
+    }
+
+    /// Watched folder: one notification per scan, no windows (nobody may be watching).
+    private func reportWatched(done: [(output: URL, images: Int)], failed: [String]) {
+        let images = done.reduce(0) { $0 + $1.images }
+        let imageText = images == 1 ? "1 image sharpened" : "\(images) images sharpened"
+        if done.count == 1 && failed.isEmpty, let d = done.first {
+            lastResult = "\(d.output.lastPathComponent) (\(imageText))"
+            notify("Windows version ready", "\(d.output.lastPathComponent): \(imageText).", path: d.output.path, fallbackAlert: false)
+            return
+        }
+        var lines: [String] = []
+        if !done.isEmpty { lines.append("\(done.count) Windows version\(done.count == 1 ? "" : "s") created (\(imageText)).") }
+        lines += failed.map { "Failed: \($0)" }
+        lastResult = failed.isEmpty ? "\(done.count) presentations fixed" : "\(done.count) fixed, \(failed.count) failed"
+        notify(failed.isEmpty ? "Windows versions ready" : "Some presentations could not be fixed",
+               lines.joined(separator: "\n"), path: done.first?.output.path, fallbackAlert: false)
     }
 
     // MARK: Notifications
@@ -400,7 +462,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         a.messageText = title
         a.informativeText = body
         a.addButton(withTitle: "OK")
-        if path != nil { a.addButton(withTitle: "Toon in Finder") }
+        if path != nil { a.addButton(withTitle: "Show in Finder") }
         if a.runModal() == .alertSecondButtonReturn, let path {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         }

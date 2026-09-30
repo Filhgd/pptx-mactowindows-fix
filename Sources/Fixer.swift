@@ -14,9 +14,9 @@ enum FixError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .notPresentation: return "Dit is geen PowerPoint-presentatie (.pptx)."
-        case .imageFailed(let name, let err): return "Afbeelding \(name) kon niet omgezet worden: \(err)"
-        case .verifyFailed(let s): return "Controle van het nieuwe bestand mislukt: \(s)"
+        case .notPresentation: return "This is not a PowerPoint presentation (.pptx)."
+        case .imageFailed(let name, let err): return "Image \(name) could not be converted: \(err)"
+        case .verifyFailed(let s): return "Check of the new file failed: \(s)"
         }
     }
 }
@@ -121,20 +121,20 @@ enum PPTXFixer {
     static func verify(_ bytes: [UInt8], removed: Set<String>) throws {
         let entries = try ZipArchive.read(bytes)
         guard entries.first?.name == "[Content_Types].xml" || entries.contains(where: { $0.name == "[Content_Types].xml" })
-        else { throw FixError.verifyFailed("[Content_Types].xml ontbreekt") }
+        else { throw FixError.verifyFailed("[Content_Types].xml is missing") }
         var names = Set<String>()
         for e in entries {
             let c = try e.contents()
-            guard CRC32.checksum(c) == e.crc32 else { throw FixError.verifyFailed("controlesom van \(e.name)") }
+            guard CRC32.checksum(c) == e.crc32 else { throw FixError.verifyFailed("checksum of \(e.name)") }
             names.insert(e.name)
             if e.name.hasSuffix(".rels") {
                 guard let xml = String(bytes: c, encoding: .utf8) else { throw FixError.verifyFailed(e.name) }
                 for (_, target) in relationships(xml, relsPath: e.name) where removed.contains(target) {
-                    throw FixError.verifyFailed("\(e.name) verwijst nog naar \(target)")
+                    throw FixError.verifyFailed("\(e.name) still points to \(target)")
                 }
             }
         }
-        for r in removed where names.contains(r) { throw FixError.verifyFailed("\(r) staat er nog in") }
+        for r in removed where names.contains(r) { throw FixError.verifyFailed("\(r) is still present") }
     }
 
     // MARK: - Sizes on the slides

@@ -7,9 +7,9 @@ enum RenderError: Error, CustomStringConvertible {
     case badPDF, drawFailed, encodeFailed
     var description: String {
         switch self {
-        case .badPDF: return "ingesloten PDF kon niet gelezen worden"
-        case .drawFailed: return "tekenen mislukt"
-        case .encodeFailed: return "PNG maken mislukt"
+        case .badPDF: return "the embedded PDF could not be read"
+        case .drawFailed: return "drawing failed"
+        case .encodeFailed: return "creating the PNG failed"
         }
     }
 }

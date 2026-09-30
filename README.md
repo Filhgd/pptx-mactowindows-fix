@@ -1,75 +1,59 @@
 # PPTX MacToWindows Fix
 
-Een kleine Mac-app in de menubalk. Ze maakt afbeeldingen die je in PowerPoint voor Mac plakt (knipsels uit een PDF) scherp wanneer de presentatie op Windows geopend wordt. Je origineel blijft ongewijzigd; de Windows-versie komt ernaast als `naam_windows.pptx`.
+A small macOS menu bar app that makes images pasted in PowerPoint for Mac (clips copied from a PDF) look sharp when the presentation is opened on Windows. Your original is never changed; the Windows version is saved next to it as `name_windows.pptx`.
 
-![icoon](assets/icon.png)
+![icon](assets/icon.png)
 
-## Het probleem
+## The problem
 
-Als je in PowerPoint voor Mac een stuk uit een PDF plakt, bewaart PowerPoint dat als een EMF-bestand met twee versies erin:
+When you paste part of a PDF into PowerPoint for Mac, PowerPoint stores it as an EMF image with two versions inside:
 
-- de originele PDF, scherp op elke grootte. Die toont de Mac.
-- een reservekopie als bitmap van meestal 400 tot 550 pixels breed. Die toont Windows, want Windows kan de PDF niet lezen.
+- the original PDF, sharp at any size. This is what the Mac shows.
+- a low-resolution backup bitmap, usually 400 to 550 pixels wide. This is what Windows shows, because Windows cannot read the PDF.
 
-Op een dia uitvergroot komt die reservekopie uit op 45 tot 75 ppi, en dan zie je pixels.
+Enlarged on a slide, that backup ends up at roughly 45 to 75 ppi, which looks pixelated.
 
-## Wat de app doet
+## What the app does
 
-1. Zoekt in de presentatie naar die EMF-bestanden met een PDF erin.
-2. Tekent de PDF opnieuw als PNG van 300 ppi, op de grootte waarop hij op de dia staat (maximaal 5000 pixels). Dat gebeurt met de PDF-engine van macOS, dus het ziet eruit zoals op je Mac.
-3. Vervangt het EMF-bestand door die PNG. Positie, grootte en bijsnijding blijven gelijk; alle andere onderdelen van het bestand blijven byte voor byte hetzelfde.
-4. Leest het nieuwe bestand terug ter controle voor het opgeslagen wordt.
+1. Finds the EMF images in the presentation that contain a PDF.
+2. Renders each PDF as a 300 ppi PNG at the size it is shown on the slide (at most 5000 pixels), using the macOS PDF engine, so it looks the same as on your Mac.
+3. Replaces the EMF with that PNG. Position, size and cropping stay the same, and every other part of the file is kept byte for byte.
+4. Reads the new file back to check it before saving.
 
-Andere afbeeldingen (gewone PNG, JPEG) raakt de app niet aan. Een presentatie zonder zulke knipsels krijgt geen Windows-versie.
+Other images (regular PNG, JPEG) are left alone. A presentation without such clips does not get a Windows version.
 
-## Gebruik
+## Usage
 
-De app staat als toverstaf-icoon in de menubalk.
+The app lives in the menu bar as a magic wand icon.
 
-- **Slepen:** sleep een .pptx (of een map) op het icoon in de menubalk, of op de app in Finder.
-- **Automatisch:** kies in het menu een map. Elke presentatie die daarin (of in een submap) terechtkomt of gewijzigd wordt, krijgt automatisch een Windows-versie ernaast. Wijzig je het origineel, dan wordt de Windows-versie bijgewerkt.
-- **Starten bij inloggen:** aan te zetten in het menu.
+- **Drop:** drop one or more presentations, or a folder, on the menu bar icon or on the app in Finder. A batch gets one summary notification.
+- **Automatic:** choose a folder in the menu. Every presentation that lands in that folder (or a subfolder), or is changed there, automatically gets an updated Windows version next to it.
+- **Open at Login:** can be turned on in the menu.
 
-Klik op de melding "Windows-versie klaar" om het bestand in Finder te tonen.
+Click the "Windows version ready" notification to show the file in Finder.
 
-## Installeren
+## Installation
 
-Download `PPTX-MacToWindows-Fix-macOS.zip` bij de laatste release, pak uit en sleep de app naar Programma's. De release-versie is ondertekend en genotariseerd door Apple.
+Download `PPTX-MacToWindows-Fix-macOS.zip` from the latest release, unzip it and move the app to Applications. Requires macOS 13 or later (Apple silicon or Intel).
 
-## Releases
+## Building
 
-Een release publiceren op GitHub (tag bv. `v1.0.0`) bouwt, test, ondertekent en notariseert de app en hangt de zip aan de release. Werk eerst `VERSION` bij.
-
-Elke push naar `main` bouwt en test de app ook; die versie staat als download bij de run in het tabblad Actions (ondertekend, niet genotariseerd). De logboeken van de laatste run staan op de branch `ci-report`.
-
-Secrets (Settings > Secrets and variables > Actions), dezelfde als bij AutoSign:
-
-| Secret | Waarde |
-|---|---|
-| `MACOS_CERT_P12` | *Developer ID Application*-certificaat + sleutel als .p12, base64 |
-| `MACOS_CERT_PASSWORD` | Wachtwoord van de .p12 |
-| `APPLE_ID` | Apple ID (voor notarisatie) |
-| `APPLE_TEAM_ID` | Team ID |
-| `APPLE_APP_PASSWORD` | App-specifiek wachtwoord |
-
-## Zelf bouwen
-
-Vereist Xcode of de Command Line Tools, macOS 13 of nieuwer.
+Requires Xcode or the Command Line Tools.
 
 ```
 ./build_app.sh
-tests/run_tests.sh      # vereist: pip install python-pptx pillow
+tests/run_tests.sh      # needs: pip install python-pptx pillow
 ```
 
-Opdrachtregel: `"PPTX MacToWindows Fix.app/Contents/MacOS/PPTXFix" --fix in.pptx [uit.pptx]`
+Command line: `"PPTX MacToWindows Fix.app/Contents/MacOS/PPTXFix" --fix in.pptx [out.pptx]`, or `--fix-all file1.pptx file2.pptx ...`
 
-## Opbouw
+## Source layout
 
-| Bestand | Inhoud |
+| File | Contents |
 |---|---|
-| `Sources/Zip.swift` | ZIP lezen en schrijven (geen externe bibliotheken) |
-| `Sources/EMF.swift` | De PDF uit een Mac-EMF halen |
-| `Sources/Render.swift` | PDF naar PNG met CoreGraphics |
-| `Sources/Fixer.swift` | De presentatie aanpassen en controleren |
-| `Sources/main.swift` | Menubalk, slepen, bewaakte map, meldingen |
-| `tests/` | Testpresentatie maken en de uitkomst controleren |
+| `Sources/Zip.swift` | Reading and writing ZIP files (no external libraries) |
+| `Sources/EMF.swift` | Extracting the PDF from a Mac EMF |
+| `Sources/Render.swift` | PDF to PNG with Core Graphics |
+| `Sources/Fixer.swift` | Rewriting and checking the presentation |
+| `Sources/main.swift` | Menu bar, drag and drop, watched folder, notifications |
+| `tests/` | Builds test presentations and checks the results |
