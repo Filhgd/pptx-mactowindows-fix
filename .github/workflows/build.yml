@@ -77,22 +77,6 @@ jobs:
         with:
           files: PPTX-MacToWindows-Fix-macOS.zip
 
-      # Build and test logs on the branch "ci-report", so they can be read without the Actions tab.
-      - name: Publish test report
-        if: always()
-        run: |
-          REPORT="$RUNNER_TEMP/report"
-          mkdir -p "$REPORT"
-          cp -R tests/out/. "$REPORT/" 2>/dev/null || true
-          rm -f "$REPORT"/*.pptx
-          echo "${{ github.sha }} ${{ github.event_name }} ${{ job.status }}" > "$REPORT/RESULT.txt"
-          cd "$REPORT"
-          git init -q
-          git checkout -q -b ci-report
-          git add -A
-          git -c user.name=ci -c user.email=ci@localhost commit -q -m "CI report for ${{ github.sha }}"
-          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-report
-
       - name: Remove temporary keychain
         if: always() && env.MACOS_CERT_P12 != ''
         run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
