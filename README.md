@@ -78,6 +78,10 @@ Keep working in your **original** file on your Mac. Use (or send) the **`_window
 
 **An image is still blurry on Windows.** The app fixes images that were pasted from a PDF. A screenshot or photo that was already low-resolution cannot be made sharper. Images pasted from other Mac apps than a PDF viewer have not been tested.
 
+## Support
+
+The app is free. If it saves you time, you can [buy me a coffee](https://buymeacoffee.com/filiphaegdorens). You can also find the link in the app menu.
+
 ## Uninstalling
 
 Choose **Quit** in the menu, turn off **Open at Login** first if it was on, and move the app from Applications to the Trash.

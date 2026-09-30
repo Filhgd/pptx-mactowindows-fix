@@ -6,6 +6,7 @@ import UserNotifications
 
 let appName = "PPTX MacToWindows Fix"
 let outputSuffix = "_windows"
+let supportURL = URL(string: "https://buymeacoffee.com/filiphaegdorens")!
 
 // MARK: - Files
 
@@ -166,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         menu.addItem(login)
         menu.addItem(info("Last: \(lastResult)"))
         menu.addItem(.separator())
+        menu.addItem(item("Buy Me a Coffee…", #selector(buyCoffee)))
         menu.addItem(item("About \(appName)", #selector(about)))
         menu.addItem(item("Quit", #selector(quit), key: "q"))
     }
@@ -225,11 +227,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 
+    @objc private func buyCoffee() { NSWorkspace.shared.open(supportURL) }
+
     @objc private func about() {
+        let credits = NSMutableAttributedString(
+            string: "Makes PDF clips pasted in PowerPoint for Mac sharp on Windows. Your original is never changed; the Windows version gets \"\(outputSuffix)\" in its name.\n\nFree to use. If it saves you time, you can buy me a coffee.",
+            attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)])
+        let link = "buy me a coffee"
+        let range = (credits.string as NSString).range(of: link)
+        if range.location != NSNotFound { credits.addAttribute(.link, value: supportURL, range: range) }
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        credits.addAttribute(.paragraphStyle, value: centered, range: NSRange(location: 0, length: credits.length))
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(options: [
-            .credits: NSAttributedString(string: "Makes PDF clips pasted in PowerPoint for Mac sharp on Windows. Your original is never changed; the Windows version gets \"\(outputSuffix)\" in its name.")
-        ])
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
