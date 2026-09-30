@@ -1,0 +1,98 @@
+name: Build macOS app
+
+# Every push to main: build + tests, app available as a download under the run (Actions tab).
+# Publishing a release: build, sign, notarize, attach the zip to the release.
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    env:
+      # Same secrets as the AutoSign repo. Without them the app is only ad-hoc signed.
+      MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+      MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      NOTARIZE: ${{ github.event_name == 'release' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test tools
+        run: pip install python-pptx pillow
+
+      - name: Import Developer ID certificate
+        if: env.MACOS_CERT_P12 != ''
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KC_PASS="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KC_PASS" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          ID="$(security find-identity -v -p codesigning "$KEYCHAIN" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)"/\1/')"
+          if [ -z "$ID" ]; then echo "No 'Developer ID Application' certificate in MACOS_CERT_P12"; exit 1; fi
+          echo "CODESIGN_IDENTITY=$ID" >> "$GITHUB_ENV"
+
+      - name: Build app
+        run: |
+          mkdir -p tests/out
+          set -o pipefail
+          ./build_app.sh 2>&1 | tee tests/out/build.log
+
+      - name: Test
+        run: |
+          set -o pipefail
+          tests/run_tests.sh 2>&1 | tee tests/out/test.log
+
+      - name: Zip app
+        run: ditto -c -k --keepParent "dist/PPTX MacToWindows Fix.app" PPTX-MacToWindows-Fix-macOS.zip
+
+      - name: Upload build (push)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PPTX-MacToWindows-Fix-macOS
+          path: PPTX-MacToWindows-Fix-macOS.zip
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: PPTX-MacToWindows-Fix-macOS.zip
+
+      # Build and test logs on the branch "ci-report", so they can be read without the Actions tab.
+      - name: Publish test report
+        if: always()
+        run: |
+          REPORT="$RUNNER_TEMP/report"
+          mkdir -p "$REPORT"
+          cp -R tests/out/. "$REPORT/" 2>/dev/null || true
+          rm -f "$REPORT"/*.pptx
+          echo "${{ github.sha }} ${{ github.event_name }} ${{ job.status }}" > "$REPORT/RESULT.txt"
+          cd "$REPORT"
+          git init -q
+          git checkout -q -b ci-report
+          git add -A
+          git -c user.name=ci -c user.email=ci@localhost commit -q -m "CI report for ${{ github.sha }}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-report
+
+      - name: Remove temporary keychain
+        if: always() && env.MACOS_CERT_P12 != ''
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true
