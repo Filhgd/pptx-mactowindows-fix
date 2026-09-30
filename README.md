@@ -16,7 +16,7 @@ Yes, if you:
 
 When you paste a piece of a PDF into PowerPoint for Mac, PowerPoint saves two versions of it in the file: the original PDF, which is sharp at any size, and a small backup picture of only a few hundred pixels wide. Your Mac shows the sharp PDF. Windows cannot read that PDF, so it shows the small backup picture, enlarged to fit the slide. That is the pixelation you see.
 
-This app takes the sharp PDF that is already inside your file and turns it into a high-resolution picture (300 ppi at the size it appears on your slide) that Windows can show. Your presentations never leave your Mac: all the work happens locally. The only time the app goes online is a daily check for new versions (see Updates below).
+This app takes the sharp PDF that is already inside your file and turns it into a high-resolution picture (300 ppi at the size it appears on your slide) that Windows can show. Your presentations never leave your Mac: all the work happens locally. The only time the app goes online is a daily check for new versions (see [Updates](#updates)).
 
 ## Installation
 
@@ -24,37 +24,46 @@ This app takes the sharp PDF that is already inside your file and turns it into 
 2. Double-click the zip to unpack it.
 3. Drag **PPTX MacToWindows Fix** to your **Applications** folder and open it.
 
+That's all: the app is complete, and you don't need to install anything else. It is signed and notarized by Apple. The first time, macOS asks whether you want to open an app downloaded from the internet: click **Open**.
+
 Requires macOS 13 (Ventura) or later, on Apple silicon or Intel.
 
 ## First launch
 
-The app has no window. It lives in the **menu bar** at the top right of your screen, as a **magic wand** icon.
+A welcome screen explains the three ways to use the app. Leave **Open at login** on if you want automatic fixing to keep working after a restart, and click **Get Started**.
 
-On first launch it asks two things:
-
-- **Open at login**: leave this on if you want automatic fixing to keep working after a restart.
-- **Choose a folder** to watch (optional, see below). You can also do this later from the menu.
-
-macOS may also ask whether the app may **send notifications** (recommended, so you know when a file is ready) and whether it may access folders such as **Documents**, **Desktop** or **OneDrive**. Allow access to the folders where your presentations are.
+macOS may then ask whether the app may **send notifications** (recommended, so you know when a file is ready while the window is closed) and, later, whether it may access folders such as **Documents**, **Desktop** or **OneDrive**. Allow access to the folders where your presentations are.
 
 ## How to use it
 
-### Drop files on the icon
+<img src="assets/screenshot.png" alt="The app window" width="480">
 
-Drag one or more presentations onto the magic wand icon in the menu bar. You can also drop a whole folder, or drop files on the app icon in Finder or the Dock. For each presentation that needs it, a fixed copy appears next to the original:
+### Drop presentations in the window
+
+Drag one or more presentations, or a whole folder, anywhere onto the window. You can also click **Choose Files…**, or drop files on the app's icon in the Dock or in Finder. For each presentation that needs it, a fixed copy appears next to the original:
 
 `My talk.pptx` → `My talk_windows.pptx`
 
-You get one notification per drop, also when you drop many files at once. Click it to show the new file in Finder.
+The window shows the progress and, under **Recent**, the result for each file. From that list you can:
 
-You can also choose **Fix Presentation…** in the menu to pick files.
+- **drag a fixed copy** straight into an email, Teams or a Finder folder,
+- **double-click** it to open it,
+- click the **magnifying glass** to show it in Finder (right-click for more options).
 
 ### Let it work automatically
 
-Choose **Choose Folder to Fix Automatically…** in the menu and pick the folder where you keep your presentations (subfolders are included). From then on:
+At the bottom of the window, next to **Fix automatically**, click **Choose Folder…** and pick the folder where you keep your presentations (subfolders are included). From then on:
 
-- every presentation you save or copy into that folder gets a `_windows` version next to it within a few seconds, and
-- when you change the original later, the `_windows` version is updated automatically.
+- every presentation you save or copy into that folder gets a `_windows` copy next to it within a few seconds, and
+- when you change the original later, the `_windows` copy is updated automatically.
+
+This keeps working while the window is closed. You get a notification when new copies are ready.
+
+### Closing the window
+
+Closing the window does not quit the app. It keeps running in the **menu bar** at the top right of your screen, as a **magic wand** icon, so the watched folder keeps working. Click that icon and choose **Open PPTX MacToWindows Fix** to bring the window back, or simply open the app again from Applications. To quit completely, choose **Quit** in that menu.
+
+When the app starts at login, it starts quietly in the menu bar without opening the window.
 
 ### Which file do I use?
 
@@ -70,33 +79,37 @@ Keep working in your **original** file on your Mac. Use (or send) the **`_window
 
 ## Troubleshooting
 
-**I don't see the icon in the menu bar.** On MacBooks with a notch, menu bar icons can be hidden when the menu bar is full. Close a few other menu bar apps, or drop your files on the app icon in Finder instead. Opening the app again from Applications shows a window with the main options.
+**I closed the window and can't find the app.** Open it again from Applications (or with Spotlight): the window comes back. On MacBooks with a notch, the menu bar icon can be hidden when the menu bar is full.
 
-**I don't get notifications.** Check System Settings > Notifications > PPTX MacToWindows Fix. Without notifications, the app shows a message window when you drop files yourself.
+**I don't get notifications.** Check System Settings > Notifications > PPTX MacToWindows Fix. Notifications are only sent while the window is closed or in the background; everything is always listed in the window as well.
 
 **The watched folder does nothing.** Make sure the app is running (icon in the menu bar) and that it was allowed to access that folder (System Settings > Privacy & Security > Files and Folders). Files whose name ends in `_windows` are skipped on purpose.
+
+**"Only PowerPoint presentations (.pptx) can be fixed."** The app works on .pptx files. Older .ppt files are not supported; open them in PowerPoint and save them as .pptx first.
 
 **An image is still blurry on Windows.** The app fixes images that were pasted from a PDF. A screenshot or photo that was already low-resolution cannot be made sharper. Images pasted from other Mac apps than a PDF viewer have not been tested.
 
 ## Updates
 
-Once a day the app checks GitHub for a new version. It only reads the public release page; nothing about you or your files is sent. When a new version is available, you get a notification and an **Update Available** item appears at the top of the menu. From there you can see what's new and choose **Download**, **Later** or **Skip This Version**.
+Once a day the app checks GitHub for a new version. It only reads the public release page; nothing about you or your files is sent. When a new version is available, a banner appears at the top of the window (and you get a notification if the window is closed). From there you can see what's new and choose **Download**, **Later** or **Skip This Version**.
 
-To install an update: quit the app, unzip the download and replace the app in Applications.
+To install an update: quit the app (menu bar icon > Quit), unzip the download and replace the app in Applications.
 
-You can also choose **Check for Updates…** in the menu at any time, or turn off **Check for Updates Automatically**.
+You can also choose **Check for Updates…** in the menu bar icon's menu at any time, or turn off **Check for Updates Automatically** there.
 
 ## Support
 
-The app is free. If it saves you time, you can [buy me a coffee](https://buymeacoffee.com/filiphaegdorens). You can also find the link in the app menu.
+The app is free. If it saves you time, you can [buy me a coffee](https://buymeacoffee.com/filiphaegdorens). The link is also at the bottom of the app window.
 
 ## Uninstalling
 
-Choose **Quit** in the menu, turn off **Open at Login** first if it was on, and move the app from Applications to the Trash.
+Uncheck **Open at login** at the bottom of the window, choose **Quit** in the menu bar icon's menu, and move the app from Applications to the Trash.
 
-## For developers
+## Building from source (developers only)
 
-The app is written in Swift with only Apple frameworks, no external libraries. Requires Xcode or the Command Line Tools.
+You don't need this to use the app. It is only for people who want to change or build the app themselves.
+
+The app is written in Swift and uses only Apple's own frameworks, without external libraries. Building it requires Xcode or the Xcode Command Line Tools.
 
 ```
 ./build_app.sh
@@ -111,5 +124,8 @@ Command line use: `"PPTX MacToWindows Fix.app/Contents/MacOS/PPTXFix" --fix in.p
 | `Sources/EMF.swift` | Extracting the PDF that PowerPoint for Mac stores inside an EMF image |
 | `Sources/Render.swift` | Rendering the PDF to PNG with Core Graphics |
 | `Sources/Fixer.swift` | Replacing the images and checking the result |
-| `Sources/main.swift` | Menu bar app: drag and drop, watched folder, notifications |
-| `tests/` | Builds test presentations and checks the output |
+| `Sources/Updater.swift` | Checking GitHub for a new version |
+| `Sources/Model.swift`, `Sources/Views.swift` | The window and the welcome screen (SwiftUI) |
+| `Sources/main.swift` | App logic: window, menu bar, watched folder, notifications, command line |
+| `Sources/Snapshots.swift` | Screenshots of the window for the tests |
+| `tests/` | Builds test presentations, checks the output and the app's behaviour |
