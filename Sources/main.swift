@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import CoreServices
 import ServiceManagement
 import UniformTypeIdentifiers
@@ -92,37 +93,65 @@ if args.count >= 2, args[1] == "--check-update" {
     done.wait()
     exit(code)
 }
+if args.count >= 3, args[1] == "--render-ui" {
+    // Screenshots of the window in several states, light and dark (used by the tests).
+    renderSnapshots(to: URL(fileURLWithPath: args[2]))
+    exit(0)
+}
 if args.count >= 2, args[1] == "--version" {
     print(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
     exit(0)
 }
 
+
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate,
                          NSDraggingDestination, UNUserNotificationCenterDelegate {
+    let model = AppModel()
+    private var window: NSWindow?
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private let work = DispatchQueue(label: "pptxfix.work")
     private var stream: FSEventStreamRef?
     private var pendingScan: DispatchWorkItem?
+    private var launchedAtLogin = false
     private var openedWithFiles = false
-    private var lastResult = "Nothing fixed yet"
     private let defaults = UserDefaults.standard
-    private var availableUpdate: ReleaseInfo?
     private var updateTimer: Timer?
+    private var batchJobs: [UUID] = []   // manual jobs of the batch in progress
 
     // Only touched on the work queue.
     private var skipped: [String: Double] = [:]   // path -> modification time of a version that needed nothing / failed
 
+    private let onboardingKey = "onboardingV2Done"
+
     private var watchFolder: URL? {
         get { defaults.string(forKey: "watchFolder").map { URL(fileURLWithPath: $0, isDirectory: true) } }
-        set { defaults.set(newValue?.path, forKey: "watchFolder") }
+        set {
+            defaults.set(newValue?.path, forKey: "watchFolder")
+            model.watchFolder = newValue
+        }
+    }
+
+    // MARK: Launch
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Started by macOS at login: stay quietly in the menu bar.
+        if let event = NSAppleEventManager.shared().currentAppleEvent,
+           event.eventID == AEEventID(kAEOpenApplication),
+           event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem) {
+            launchedAtLogin = true
+        }
+        if ProcessInfo.processInfo.systemUptime < 120 { launchedAtLogin = true }
+        buildMainMenu()
+        wireModel()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         openedWithFiles = true
-        fixManually(urls)
+        showWindow()
+        process(urls)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -132,17 +161,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: appName)
             button.image?.isTemplate = true
-            button.toolTip = "\(appName): drop a presentation here"
+            button.toolTip = appName
             button.window?.registerForDraggedTypes([.fileURL])
             button.window?.delegate = self
         }
         menu.delegate = self
         statusItem.menu = menu
 
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
-
+        UNUserNotificationCenter.current().delegate = self
+        model.watchFolder = watchFolder
+        model.openAtLogin = SMAppService.mainApp.status == .enabled
         if let folder = watchFolder { startWatching(folder) }
 
         // Daily update check: first shortly after launch, then re-evaluated every hour.
@@ -152,60 +180,140 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             self?.checkForUpdatesIfDue()
         }
 
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if !self.defaults.bool(forKey: "welcomeShown") && !self.openedWithFiles { self.showWelcome() }
+        if !defaults.bool(forKey: onboardingKey) {
+            model.showOnboarding = true
+            showWindow()
+        } else {
+            requestNotifications()
+            if !launchedAtLogin && !openedWithFiles { showWindow() }
         }
     }
 
-    /// Opening the app again (Finder, Launchpad, Spotlight) shows the main options,
-    /// useful when the menu bar icon is hidden behind the notch.
+    /// Clicking the app in Finder, the Dock or Launchpad while it runs.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        NSApp.activate(ignoringOtherApps: true)
-        let a = NSAlert()
-        a.messageText = "\(appName) is running"
-        var text = "It lives in the menu bar as a magic wand icon. Drop presentations on that icon, or on the app in Finder."
-        if let folder = watchFolder { text += "\n\nWatched folder: \(folder.path)" }
-        a.informativeText = text
-        a.addButton(withTitle: "Fix Presentation…")
-        a.addButton(withTitle: watchFolder == nil ? "Choose Folder…" : "Choose Another Folder…")
-        a.addButton(withTitle: "Close")
-        switch a.runModal() {
-        case .alertFirstButtonReturn: chooseFiles()
-        case .alertSecondButtonReturn: chooseFolder()
-        default: break
-        }
+        showWindow()
         return false
     }
 
-    // MARK: Menu
+    private func wireModel() {
+        model.onDrop = { [weak self] urls in self?.process(urls) }
+        model.onChooseFiles = { [weak self] in self?.chooseFiles() }
+        model.onChooseFolder = { [weak self] in self?.chooseFolder() }
+        model.onStopWatching = { [weak self] in self?.stopWatchingFolder() }
+        model.onSetOpenAtLogin = { [weak self] on in self?.setOpenAtLogin(on) }
+        model.onShowUpdate = { [weak self] in self?.showUpdateFromMenu() }
+        model.onDownloadUpdate = { [weak self] in self?.downloadUpdate() }
+        model.onFinishOnboarding = { [weak self] login in
+            guard let self else { return }
+            self.defaults.set(true, forKey: self.onboardingKey)
+            self.model.showOnboarding = false
+            self.setOpenAtLogin(login)
+            self.requestNotifications()
+        }
+    }
+
+    private func requestNotifications() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    // MARK: Window
+
+    private func makeWindowIfNeeded() -> NSWindow {
+        if let w = window { return w }
+        let hosting = NSHostingController(rootView: MainView().environmentObject(model))
+        let w = NSWindow(contentViewController: hosting)
+        w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.title = appName
+        w.isReleasedWhenClosed = false
+        w.delegate = self
+        w.setContentSize(NSSize(width: 480, height: 660))
+        w.center()
+        w.setFrameAutosaveName("MainWindow")
+        window = w
+        return w
+    }
+
+    @objc func showWindow() {
+        let w = makeWindowIfNeeded()
+        // While the window is open the app is in the Dock too (also a drop target).
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === window else { return }
+        // Back to the menu bar only.
+        DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    private var windowIsFront: Bool {
+        guard let w = window else { return false }
+        return w.isVisible && !w.isMiniaturized && NSApp.isActive
+    }
+
+    private func buildMainMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About \(appName)", action: #selector(about), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdatesManually), keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Buy Me a Coffee…", action: #selector(buyCoffee), keyEquivalent: "").target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide \(appName)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit \(appName)", action: #selector(quit), keyEquivalent: "q").target = self
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Choose Files…", action: #selector(chooseFiles), keyEquivalent: "o").target = self
+        fileMenu.addItem(withTitle: "Choose Folder to Fix Automatically…", action: #selector(chooseFolder), keyEquivalent: "").target = self
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        main.addItem(fileItem)
+
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        windowMenu.addItem(withTitle: appName, action: #selector(showWindow), keyEquivalent: "1").target = self
+        windowItem.submenu = windowMenu
+        main.addItem(windowItem)
+
+        NSApp.mainMenu = main
+    }
+
+    // MARK: Menu bar menu
 
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
-        if let update = availableUpdate {
-            let u = item("Update Available: Version \(update.version)…", #selector(showUpdateFromMenu))
-            u.attributedTitle = NSAttributedString(string: u.title, attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
-            menu.addItem(u)
-            menu.addItem(.separator())
+        let open = item("Open \(appName)", #selector(showWindow))
+        open.attributedTitle = NSAttributedString(string: open.title,
+                                                  attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
+        menu.addItem(open)
+        if let update = model.update {
+            menu.addItem(item("Update Available: Version \(update.version)…", #selector(showUpdateFromMenu)))
         }
-        menu.addItem(info("Drop a presentation on the icon above"))
-        menu.addItem(item("Fix Presentation…", #selector(chooseFiles)))
         menu.addItem(.separator())
+        menu.addItem(item("Choose Files…", #selector(chooseFiles)))
         if let folder = watchFolder {
-            menu.addItem(info("Watched folder: \(folder.lastPathComponent)"))
+            menu.addItem(info("Fixing automatically: \(folder.lastPathComponent)"))
             menu.addItem(item("Show Folder in Finder", #selector(revealFolder)))
-            menu.addItem(item("Choose Another Folder…", #selector(chooseFolder)))
-            menu.addItem(item("Stop Watching", #selector(stopWatchingFolder)))
+            menu.addItem(item("Stop Fixing Automatically", #selector(stopWatchingFolder)))
         } else {
-            menu.addItem(info("No watched folder"))
             menu.addItem(item("Choose Folder to Fix Automatically…", #selector(chooseFolder)))
         }
         menu.addItem(.separator())
         let login = item("Open at Login", #selector(toggleLogin))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
-        menu.addItem(info("Last: \(lastResult)"))
-        menu.addItem(.separator())
         menu.addItem(item("Check for Updates…", #selector(checkForUpdatesManually)))
         let auto = item("Check for Updates Automatically", #selector(toggleAutoUpdate))
         auto.state = defaults.bool(forKey: "autoUpdateCheck") ? .on : .off
@@ -228,14 +336,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return i
     }
 
+    // MARK: Actions
+
     @objc private func chooseFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         if let t = UTType(filenameExtension: "pptx") { panel.allowedContentTypes = [t] }
-        panel.message = "Choose the presentations you want to show on Windows."
-        NSApp.activate(ignoringOtherApps: true)
-        if panel.runModal() == .OK { fixManually(panel.urls) }
+        panel.prompt = "Fix"
+        panel.message = "Choose presentations (or a folder) to make a sharp Windows copy of."
+        runPanel(panel) { [weak self] in self?.process(panel.urls) }
     }
 
     @objc private func chooseFolder() {
@@ -243,12 +353,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
-        panel.prompt = "Watch This Folder"
-        panel.message = "Every presentation in this folder (and its subfolders) automatically gets a Windows version next to it."
-        NSApp.activate(ignoringOtherApps: true)
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        watchFolder = url
-        startWatching(url)
+        panel.prompt = "Fix Automatically"
+        panel.message = "Every presentation saved in this folder (or a subfolder) automatically gets a sharp Windows copy next to it."
+        runPanel(panel) { [weak self] in
+            guard let self, let url = panel.url else { return }
+            self.watchFolder = url
+            self.startWatching(url)
+        }
+    }
+
+    /// As a sheet on the window when it is open, otherwise as a separate dialog.
+    private func runPanel(_ panel: NSOpenPanel, onOK: @escaping () -> Void) {
+        if let w = window, w.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
+            panel.beginSheetModal(for: w) { if $0 == .OK { onOK() } }
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+            if panel.runModal() == .OK { onOK() }
+        }
     }
 
     @objc private func revealFolder() {
@@ -261,14 +383,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     @objc private func toggleLogin() {
+        setOpenAtLogin(SMAppService.mainApp.status != .enabled)
+    }
+
+    private func setOpenAtLogin(_ on: Bool) {
         let service = SMAppService.mainApp
         do {
-            if service.status == .enabled { try service.unregister() } else { try service.register() }
+            if on && service.status != .enabled { try service.register() }
+            if !on && service.status == .enabled { try service.unregister() }
         } catch {
             alert("Open at Login could not be set", "\(error.localizedDescription)\n\nYou can also turn it on in System Settings > General > Login Items.")
-            SMAppService.openSystemSettingsLoginItems()
         }
-        if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        if on && service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        model.openAtLogin = service.status == .enabled
     }
 
     @objc private func buyCoffee() { NSWorkspace.shared.open(supportURL) }
@@ -277,8 +404,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let credits = NSMutableAttributedString(
             string: "Makes PDF clips pasted in PowerPoint for Mac sharp on Windows. Your original is never changed; the Windows version gets \"\(outputSuffix)\" in its name.\n\nFree to use. If it saves you time, you can buy me a coffee.",
             attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)])
-        let link = "buy me a coffee"
-        let range = (credits.string as NSString).range(of: link)
+        let range = (credits.string as NSString).range(of: "buy me a coffee")
         if range.location != NSNotFound { credits.addAttribute(.link, value: supportURL, range: range) }
         let centered = NSMutableParagraphStyle()
         centered.alignment = .center
@@ -289,26 +415,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @objc private func quit() { NSApp.terminate(nil) }
 
-    private func showWelcome() {
-        defaults.set(true, forKey: "welcomeShown")
-        NSApp.activate(ignoringOtherApps: true)
-        let a = NSAlert()
-        a.messageText = "\(appName) is now in the menu bar"
-        a.informativeText = """
-        Look for the magic wand icon at the top right of your screen.
-
-        Drop one or more presentations (or a folder) on that icon, or choose a folder to watch: every presentation that lands there automatically gets a sharp Windows version next to it (name\(outputSuffix).pptx). Your original is never changed.
-        """
-        let login = NSButton(checkboxWithTitle: "Open at login", target: nil, action: nil)
-        login.state = .on
-        a.accessoryView = login
-        a.addButton(withTitle: "Choose Folder…")
-        a.addButton(withTitle: "Not Now")
-        let answer = a.runModal()
-        if login.state == .on, SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
-        if answer == .alertFirstButtonReturn { chooseFolder() }
-    }
-
     // MARK: Updates
 
     private func checkForUpdatesIfDue() {
@@ -318,42 +424,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         Updater.fetchLatest { [weak self] result in
             DispatchQueue.main.async {
                 guard let self else { return }
-                guard case .success(let release) = result else { return }   // silent: try again tomorrow
+                guard case .success(let release) = result else { return }   // silent: try again later
                 self.defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
                 guard Updater.isNewer(release.version, than: Updater.currentVersion),
                       self.defaults.string(forKey: "skippedVersion") != release.version else {
-                    self.availableUpdate = nil
+                    self.model.update = nil
                     return
                 }
-                self.availableUpdate = release
+                self.model.update = release
                 if self.defaults.string(forKey: "notifiedVersion") != release.version {
                     self.defaults.set(release.version, forKey: "notifiedVersion")
-                    self.announceUpdate(release)
-                }
-            }
-        }
-    }
-
-    /// Notification when allowed; otherwise the dialog (once per version).
-    private func announceUpdate(_ release: ReleaseInfo) {
-        let center = UNUserNotificationCenter.current()
-        center.getNotificationSettings { settings in
-            DispatchQueue.main.async {
-                if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-                    let content = UNMutableNotificationContent()
-                    content.title = "Update available"
-                    content.body = "\(appName) \(release.version) is available. Click to see what's new."
-                    content.userInfo = ["update": true]
-                    center.add(UNNotificationRequest(identifier: "update-\(release.version)", content: content, trigger: nil))
-                } else {
-                    self.showUpdateAlert(release)
+                    if !self.windowIsFront {
+                        self.notify("Update available", "\(appName) \(release.version) is available. Click to see what's new.",
+                                    userInfo: ["update": true])
+                    }
                 }
             }
         }
     }
 
     @objc private func showUpdateFromMenu() {
-        if let u = availableUpdate { showUpdateAlert(u) }
+        if let u = model.update { showUpdateAlert(u) }
+    }
+
+    private func downloadUpdate() {
+        if let u = model.update { NSWorkspace.shared.open(u.downloadURL ?? u.pageURL) }
     }
 
     @objc private func checkForUpdatesManually() {
@@ -364,10 +459,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
                 case .success(let release):
                     self.defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
                     if Updater.isNewer(release.version, than: Updater.currentVersion) {
-                        self.availableUpdate = release
+                        self.model.update = release
                         self.showUpdateAlert(release)
                     } else {
-                        self.availableUpdate = nil
+                        self.model.update = nil
                         self.alert("You're up to date", "\(appName) \(Updater.currentVersion) is the latest version.")
                     }
                 case .failure(let error):
@@ -382,7 +477,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
 
     private func showUpdateAlert(_ release: ReleaseInfo) {
-        NSApp.activate(ignoringOtherApps: true)
         let a = NSAlert()
         a.messageText = "\(appName) \(release.version) is available"
         var text = "You have version \(Updater.currentVersion)."
@@ -393,15 +487,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         a.addButton(withTitle: "Download")
         a.addButton(withTitle: "Later")
         a.addButton(withTitle: "Skip This Version")
-        switch a.runModal() {
-        case .alertFirstButtonReturn:
-            NSWorkspace.shared.open(release.downloadURL ?? release.pageURL)
-        case .alertThirdButtonReturn:
-            defaults.set(release.version, forKey: "skippedVersion")
-            availableUpdate = nil
-        default:
-            break
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                NSWorkspace.shared.open(release.downloadURL ?? release.pageURL)
+            case .alertThirdButtonReturn:
+                self.defaults.set(release.version, forKey: "skippedVersion")
+                self.model.update = nil
+            default:
+                break
+            }
         }
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = window, w.isVisible { a.beginSheetModal(for: w, completionHandler: handle) } else { handle(a.runModal()) }
     }
 
     // MARK: Drag and drop on the menu bar icon
@@ -417,7 +516,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let urls = droppedURLs(sender)
         guard !urls.isEmpty else { return false }
-        fixManually(urls)
+        showWindow()
+        process(urls)
         return true
     }
 
@@ -427,12 +527,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return urls.filter { $0.hasDirectoryPath || $0.pathExtension.lowercased() == "pptx" }
     }
 
-    // MARK: Fixing
+    // MARK: Fixing (drop, Choose Files, Finder)
 
     private func expand(_ urls: [URL]) -> [URL] {
         var result: [URL] = []
         for url in urls {
-            if url.hasDirectoryPath {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
                 let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil,
                                                        options: [.skipsHiddenFiles, .skipsPackageDescendants])
                 while let f = e?.nextObject() as? URL {
@@ -445,61 +546,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         return result
     }
 
-    private func fixManually(_ urls: [URL]) {
+    /// Main thread. Adds the files to the list and fixes them one after the other.
+    private func process(_ urls: [URL]) {
         let files = expand(urls)
         if files.isEmpty {
-            notify("No presentation found", "Drop a .pptx file (not one that already ends in \(outputSuffix)).", path: nil, fallbackAlert: true)
+            let onlyCopies = !urls.isEmpty && urls.allSatisfy {
+                $0.pathExtension.lowercased() == "pptx" && $0.deletingPathExtension().lastPathComponent.hasSuffix(outputSuffix)
+            }
+            model.flash(onlyCopies ? "That is already a Windows copy. Drop the original presentation."
+                                   : "Only PowerPoint presentations (.pptx) can be fixed.")
             return
         }
-        work.async { [weak self] in
-            guard let self else { return }
-            var done: [(output: URL, images: Int)] = []
-            var nothing: [String] = []
-            var failed: [String] = []
-            for file in files {
-                let out = outputURL(for: file)
-                do {
-                    let fixed = try PPTXFixer.fix(input: file, output: out)
-                    if fixed.isEmpty { nothing.append(file.lastPathComponent) } else { done.append((out, fixed.count)) }
-                } catch {
-                    failed.append("\(file.lastPathComponent): \(error)")
+        let jobs = files.map { Job(input: $0, output: outputURL(for: $0), source: .manual, state: .queued) }
+        withAnimation(.easeOut(duration: 0.2)) { model.add(jobs) }
+        batchJobs += jobs.map { $0.id }
+        let previous = model.batch
+        model.batch = BatchProgress(total: (previous?.total ?? 0) + jobs.count,
+                                    finished: previous?.finished ?? 0,
+                                    current: previous?.current ?? jobs[0].input.lastPathComponent)
+
+        for job in jobs {
+            work.async { [weak self] in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    self.model.setState(job.id, .working)
+                    self.model.batch?.current = job.input.lastPathComponent
                 }
+                let state = self.fix(job)
+                DispatchQueue.main.async { self.finished(job, state) }
             }
-            DispatchQueue.main.async { self.report(done: done, nothing: nothing, failed: failed) }
         }
     }
 
-    /// One message per drop, however many files it contained.
-    private func report(done: [(output: URL, images: Int)], nothing: [String], failed: [String]) {
-        let total = done.count + nothing.count + failed.count
-        let images = done.reduce(0) { $0 + $1.images }
-        let imageText = images == 1 ? "1 image sharpened" : "\(images) images sharpened"
+    /// Work queue.
+    private func fix(_ job: Job) -> Job.State {
+        do {
+            let fixed = try PPTXFixer.fix(input: job.input, output: job.output)
+            return fixed.isEmpty ? .nothing : .done(images: fixed.count)
+        } catch {
+            return .failed("\(error)")
+        }
+    }
 
-        if total == 1 {
-            if let d = done.first {
-                lastResult = "\(d.output.lastPathComponent) (\(imageText))"
-                notify("Windows version ready", "\(d.output.lastPathComponent): \(imageText).", path: d.output.path, fallbackAlert: true)
-            } else if let n = nothing.first {
-                lastResult = "\(n): nothing to fix"
-                notify("Nothing to fix", "\(n) has no Mac images that turn blurry on Windows.", path: nil, fallbackAlert: true)
-            } else if let f = failed.first {
-                lastResult = "fixing failed"
-                notify("Fixing failed", f, path: nil, fallbackAlert: true)
-            }
+    private func finished(_ job: Job, _ state: Job.State) {
+        withAnimation(.easeOut(duration: 0.15)) { model.setState(job.id, state) }
+        guard var batch = model.batch else { return }
+        batch.finished += 1
+        if batch.finished >= batch.total {
+            model.batch = nil
+            reportBatch(batchJobs)
+            batchJobs = []
+        } else {
+            model.batch = batch
+        }
+    }
+
+    /// Only when the window is not in front; otherwise the list already shows everything.
+    private func reportBatch(_ ids: [UUID]) {
+        guard !windowIsFront else { return }
+        let jobs = model.jobs.filter { ids.contains($0.id) }
+        let done = jobs.filter { $0.isDone }
+        let failed = jobs.filter { if case .failed = $0.state { return true } else { return false } }
+        let images = done.reduce(0) { total, job in
+            if case .done(let n) = job.state { return total + n } else { return total }
+        }
+        let imageText = images == 1 ? "1 image sharpened" : "\(images) images sharpened"
+        if jobs.count == 1, let d = done.first {
+            notify("Windows version ready", "\(d.output.lastPathComponent): \(imageText).", userInfo: ["path": d.output.path])
             return
         }
-
         var lines: [String] = []
         if !done.isEmpty { lines.append("\(done.count) Windows version\(done.count == 1 ? "" : "s") created (\(imageText)).") }
-        if !nothing.isEmpty { lines.append("\(nothing.count) had nothing to fix.") }
-        if !failed.isEmpty { lines.append("\(failed.count) failed.") }
-        lastResult = "\(done.count) of \(total) presentations fixed"
-        let title = failed.isEmpty ? "\(total) presentations processed" : "\(total) presentations processed, \(failed.count) failed"
-        notify(title, lines.joined(separator: " "), path: done.first?.output.path, fallbackAlert: failed.isEmpty)
-        if !failed.isEmpty {
-            // Failures in a batch get a window, so the reasons can be read.
-            alert(title, (lines + [""] + failed).joined(separator: "\n"), reveal: done.first?.output.path)
-        }
+        let nothing = jobs.count - done.count - failed.count
+        if nothing > 0 { lines.append("\(nothing) had nothing to fix.") }
+        if !failed.isEmpty { lines.append("\(failed.count) could not be fixed.") }
+        notify(jobs.count == 1 ? "Done" : "\(jobs.count) presentations processed", lines.joined(separator: " "), userInfo: ["window": true])
     }
 
     // MARK: Watched folder
@@ -541,11 +662,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
-    /// Runs on the work queue.
+    /// Work queue.
     private func scan(_ folder: URL) {
         var retryLater = false
-        var done: [(output: URL, images: Int)] = []
-        var failed: [String] = []
+        var reported: [Job] = []
         // Presentations that are new or changed since their Windows version was made.
         var todo: [(file: URL, mtime: Double, size: Int?)] = []
         for file in expand([folder]) {
@@ -558,93 +678,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         if !todo.isEmpty { Thread.sleep(forTimeInterval: 2) }
 
         for (file, mtime, size) in todo {
-            let out = outputURL(for: file)
             guard fileSize(file) == size, modificationDate(file)?.timeIntervalSince1970 == mtime else {
                 retryLater = true
                 continue
             }
-
-            do {
-                let fixed = try PPTXFixer.fix(input: file, output: out)
-                if fixed.isEmpty {
-                    skipped[file.path] = mtime
-                } else {
-                    skipped[file.path] = nil
-                    done.append((out, fixed.count))
-                }
-            } catch {
+            var job = Job(input: file, output: outputURL(for: file), source: .watched, state: .working)
+            job.state = fix(job)
+            switch job.state {
+            case .done:
+                skipped[file.path] = nil
+                reported.append(job)
+            case .failed:
                 skipped[file.path] = mtime   // try again once the file changes
-                failed.append("\(file.lastPathComponent): \(error)")
+                reported.append(job)
+            default:
+                skipped[file.path] = mtime
             }
         }
-        if !done.isEmpty || !failed.isEmpty {
-            let d = done, f = failed
-            DispatchQueue.main.async { self.reportWatched(done: d, failed: f) }
-        }
-        // Forget files that no longer exist, then save.
         skipped = skipped.filter { FileManager.default.fileExists(atPath: $0.key) }
         let snapshot = skipped
+        let jobs = reported
         DispatchQueue.main.async {
             self.defaults.set(snapshot, forKey: "skipped")
+            if !jobs.isEmpty {
+                withAnimation { self.model.add(jobs) }
+                self.reportWatched(jobs)
+            }
             if retryLater { self.scheduleScan(after: 5) }
         }
     }
 
-    /// Watched folder: one notification per scan, no windows (nobody may be watching).
-    private func reportWatched(done: [(output: URL, images: Int)], failed: [String]) {
-        let images = done.reduce(0) { $0 + $1.images }
-        let imageText = images == 1 ? "1 image sharpened" : "\(images) images sharpened"
-        if done.count == 1 && failed.isEmpty, let d = done.first {
-            lastResult = "\(d.output.lastPathComponent) (\(imageText))"
-            notify("Windows version ready", "\(d.output.lastPathComponent): \(imageText).", path: d.output.path, fallbackAlert: false)
+    /// One notification per scan, only when the window is not in front.
+    private func reportWatched(_ jobs: [Job]) {
+        guard !windowIsFront else { return }
+        let done = jobs.filter { $0.isDone }
+        let failed = jobs.count - done.count
+        if done.count == 1 && failed == 0, let d = done.first {
+            notify("Windows version ready", "\(d.output.lastPathComponent): \(d.detail).", userInfo: ["path": d.output.path])
             return
         }
         var lines: [String] = []
-        if !done.isEmpty { lines.append("\(done.count) Windows version\(done.count == 1 ? "" : "s") created (\(imageText)).") }
-        lines += failed.map { "Failed: \($0)" }
-        lastResult = failed.isEmpty ? "\(done.count) presentations fixed" : "\(done.count) fixed, \(failed.count) failed"
-        notify(failed.isEmpty ? "Windows versions ready" : "Some presentations could not be fixed",
-               lines.joined(separator: "\n"), path: done.first?.output.path, fallbackAlert: false)
+        if !done.isEmpty { lines.append("\(done.count) Windows version\(done.count == 1 ? "" : "s") created.") }
+        if failed > 0 { lines.append("\(failed) could not be fixed. Open the app for details.") }
+        notify(failed == 0 ? "Windows versions ready" : "Some presentations could not be fixed",
+               lines.joined(separator: " "), userInfo: ["window": true])
     }
 
     // MARK: Notifications
 
-    private func notify(_ title: String, _ body: String, path: String?, fallbackAlert: Bool) {
+    private func notify(_ title: String, _ body: String, userInfo: [String: Any]) {
         let center = UNUserNotificationCenter.current()
         center.getNotificationSettings { settings in
-            DispatchQueue.main.async {
-                if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-                    let content = UNMutableNotificationContent()
-                    content.title = title
-                    content.body = body
-                    if let path { content.userInfo = ["path": path] }
-                    center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
-                } else if fallbackAlert {
-                    self.alert(title, body, reveal: path)
-                }
-            }
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.userInfo = userInfo
+            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
         }
     }
 
-    private func alert(_ title: String, _ body: String, reveal path: String? = nil) {
-        NSApp.activate(ignoringOtherApps: true)
+    private func alert(_ title: String, _ body: String) {
         let a = NSAlert()
         a.messageText = title
         a.informativeText = body
         a.addButton(withTitle: "OK")
-        if path != nil { a.addButton(withTitle: "Show in Finder") }
-        if a.runModal() == .alertSecondButtonReturn, let path {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-        }
+        NSApp.activate(ignoringOtherApps: true)
+        if let w = window, w.isVisible { a.beginSheetModal(for: w) } else { a.runModal() }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
-        if let path = info["path"] as? String {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-        } else if info["update"] as? Bool == true {
-            DispatchQueue.main.async { self.showUpdateFromMenu() }
+        DispatchQueue.main.async {
+            if let path = info["path"] as? String {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            } else if info["update"] as? Bool == true {
+                self.showWindow()
+                self.showUpdateFromMenu()
+            } else {
+                self.showWindow()
+            }
         }
         completionHandler()
     }

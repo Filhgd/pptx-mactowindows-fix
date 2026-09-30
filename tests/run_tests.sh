@@ -52,6 +52,7 @@ W="$PWD/$OUT/watched"
 mkdir -p "$W/sub"
 defaults write $DOMAIN watchFolder "$W"
 defaults write $DOMAIN welcomeShown -bool true
+defaults write $DOMAIN onboardingV2Done -bool true
 "$BIN" & pid=$!
 sleep 5
 kill -0 "$pid" 2>/dev/null && echo "OK   app running" || bad "app did not start"
@@ -113,10 +114,24 @@ step "update check: the running app finds an update by itself"
 DOMAIN=be.haegdorens.pptxmactowindowsfix
 defaults delete $DOMAIN 2>/dev/null || true
 defaults write $DOMAIN welcomeShown -bool true
+defaults write $DOMAIN onboardingV2Done -bool true
 PPTXFIX_RELEASES_URL="file://$PWD/$OUT/release_new.json" "$BIN" & pid=$!
 for i in $(seq 1 40); do [ "$(defaults read $DOMAIN notifiedVersion 2>/dev/null)" = "9.9.9" ] && break; sleep 1; done
 [ "$(defaults read $DOMAIN notifiedVersion 2>/dev/null)" = "9.9.9" ] && echo "OK   update announced after ${i} s" || bad "automatic update check"
 [ -n "$(defaults read $DOMAIN lastUpdateCheck 2>/dev/null)" ] && echo "OK   check time saved (next check in a day)" || bad "lastUpdateCheck"
+kill "$pid" 2>/dev/null
+defaults delete $DOMAIN 2>/dev/null || true
+
+step "window screenshots (light and dark)"
+"$BIN" --render-ui "$OUT/ui"
+count=$(ls "$OUT/ui"/*.png 2>/dev/null | wc -l | tr -d ' ')
+[ "$count" = "12" ] && echo "OK   12 screenshots" || bad "expected 12 screenshots, got $count"
+
+step "app starts with the welcome screen on first launch"
+defaults delete $DOMAIN 2>/dev/null || true
+"$BIN" & pid=$!
+sleep 6
+kill -0 "$pid" 2>/dev/null && echo "OK   running with the welcome screen" || bad "app stopped on first launch"
 kill "$pid" 2>/dev/null
 defaults delete $DOMAIN 2>/dev/null || true
 

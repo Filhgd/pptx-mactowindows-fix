@@ -52,6 +52,9 @@ enum PPTXFixer {
         var replacement: [String: (newPath: String, png: [UInt8])] = [:]
         var fixed: [FixedImage] = []
 
+        // Work out size and name for each clip first, then render them all in parallel.
+        struct Plan { let path: String; let pdf: [UInt8]; let widthPx: Int; let newPath: String }
+        var plans: [Plan] = []
         for path in clips.keys.sorted() {
             let pdf = clips[path]!
             guard let size = PDFRender.pageSize(pdf), size.width > 0, size.height > 0 else {
@@ -64,17 +67,30 @@ enum PPTXFixer {
             if longest > maxSidePx { widthPx *= maxSidePx / longest }
             widthPx = max(widthPx, 16)
 
-            let rendered: (data: [UInt8], width: Int, height: Int)
-            do { rendered = try PDFRender.png(pdf, widthPx: Int(widthPx.rounded())) }
-            catch { throw FixError.imageFailed(path, error) }
-
             let base = (path as NSString).deletingPathExtension
             var newPath = base + "_hr.png"
             var n = 2
             while usedNames.contains(newPath) { newPath = base + "_hr\(n).png"; n += 1 }
             usedNames.insert(newPath)
-            replacement[path] = (newPath, rendered.data)
-            fixed.append(FixedImage(oldPath: path, newPath: newPath, width: rendered.width, height: rendered.height))
+            plans.append(Plan(path: path, pdf: pdf, widthPx: Int(widthPx.rounded()), newPath: newPath))
+        }
+
+        var results = [Result<(data: [UInt8], width: Int, height: Int), Error>?](repeating: nil, count: plans.count)
+        let lock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: plans.count) { i in
+            let r = Result { try PDFRender.png(plans[i].pdf, widthPx: plans[i].widthPx) }
+            lock.lock()
+            results[i] = r
+            lock.unlock()
+        }
+        for (i, plan) in plans.enumerated() {
+            switch results[i]! {
+            case .success(let rendered):
+                replacement[plan.path] = (plan.newPath, rendered.data)
+                fixed.append(FixedImage(oldPath: plan.path, newPath: plan.newPath, width: rendered.width, height: rendered.height))
+            case .failure(let error):
+                throw FixError.imageFailed(plan.path, error)
+            }
         }
 
         var out: [ZipEntry] = []
