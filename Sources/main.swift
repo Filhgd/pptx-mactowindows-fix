@@ -124,6 +124,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         }
     }
 
+    /// Opening the app again (Finder, Launchpad, Spotlight) shows the main options,
+    /// useful when the menu bar icon is hidden behind the notch.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "\(appName) is running"
+        var text = "It lives in the menu bar as a magic wand icon. Drop presentations on that icon, or on the app in Finder."
+        if let folder = watchFolder { text += "\n\nWatched folder: \(folder.path)" }
+        a.informativeText = text
+        a.addButton(withTitle: "Fix Presentation…")
+        a.addButton(withTitle: watchFolder == nil ? "Choose Folder…" : "Choose Another Folder…")
+        a.addButton(withTitle: "Close")
+        switch a.runModal() {
+        case .alertFirstButtonReturn: chooseFiles()
+        case .alertSecondButtonReturn: chooseFolder()
+        default: break
+        }
+        return false
+    }
+
     // MARK: Menu
 
     func menuWillOpen(_ menu: NSMenu) {

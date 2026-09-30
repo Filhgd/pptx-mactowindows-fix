@@ -14,7 +14,7 @@ PDF_W, PDF_H = 400, 270
 
 def make_pdf():
     content = (b"q 0 0 0 RG 4 w 20 20 m 380 250 l S Q "
-               b"BT /F1 40 Tf 30 120 Td (SCHERP 123) Tj ET "
+               b"BT /F1 40 Tf 30 120 Td (SHARP 123) Tj ET "
                b"0 0 1 rg 300 30 60 60 re f")
     objs = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
