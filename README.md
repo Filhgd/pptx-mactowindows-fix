@@ -65,7 +65,7 @@ Keep working in your **original** file on your Mac. Use (or send) the **`_window
 - **Your original is never changed.** The app only writes the `_windows` copy.
 - **Only the affected images change.** Pasted PDF clips are replaced by sharp pictures in the same position, size and cropping. Text, layout, animations, notes and all other images stay exactly as they are.
 - **"Nothing to fix"** means the presentation has no images of this type, so it will already look the same on Windows. No copy is made in that case.
-- **The copy is usually somewhat larger** than the original, because sharp pictures take more space.
+- **The copy is usually a bit larger.** In the original, the sharp version is a PDF, which stores text and lines very compactly. Windows needs a picture instead, and a sharp picture stores millions of pixels. In practice the difference is small (for example 9.6 MB → 10.4 MB).
 - The fixed images are pictures, not PDFs, so in the `_windows` file you cannot extract them back as PDF. Edit the original instead.
 
 ## Troubleshooting
