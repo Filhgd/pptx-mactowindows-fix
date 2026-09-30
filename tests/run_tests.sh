@@ -125,7 +125,7 @@ defaults delete $DOMAIN 2>/dev/null || true
 step "window screenshots (light and dark)"
 "$BIN" --render-ui "$OUT/ui"
 count=$(ls "$OUT/ui"/*.png 2>/dev/null | wc -l | tr -d ' ')
-[ "$count" = "12" ] && echo "OK   12 screenshots" || bad "expected 12 screenshots, got $count"
+[ "$count" = "14" ] && echo "OK   14 screenshots" || bad "expected 14 screenshots, got $count"
 
 step "app starts with the welcome screen on first launch"
 defaults delete $DOMAIN 2>/dev/null || true

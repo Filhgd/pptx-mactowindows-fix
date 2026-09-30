@@ -38,6 +38,13 @@ func renderSnapshots(to dir: URL) {
                       job("Guest lecture", .done(images: 1), .watched)]
         }),
         ("5-wrong-file", model { $0.dropMessage = "Only PowerPoint presentations (.pptx) can be fixed." }),
+        ("6-readme", model { m in
+            m.watchFolder = talks
+            m.openAtLogin = true
+            m.jobs = [job("Conference talk", .done(images: 10)),
+                      job("Guest lecture", .done(images: 3), .watched),
+                      job("Team meeting", .nothing)]
+        }),
     ]
 
     for (name, m) in states {
@@ -70,8 +77,13 @@ private func render<V: View>(_ view: V, size: NSSize?, appearance: NSAppearance.
     hosting.layoutSubtreeIfNeeded()
     // Capture the whole window frame (including the window buttons) when possible.
     let target: NSView = window.contentView?.superview ?? hosting
-    guard let rep = target.bitmapImageRepForCachingDisplay(in: target.bounds) else { return }
-    target.cacheDisplay(in: target.bounds, to: rep)
+    // Always at Retina resolution (2x), also on a build server without a Retina screen.
+    let bounds = target.bounds
+    guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(bounds.width * 2), pixelsHigh: Int(bounds.height * 2),
+                                     bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+    rep.size = bounds.size
+    target.cacheDisplay(in: bounds, to: rep)
     if let png = rep.representation(using: .png, properties: [:]) {
         try? png.write(to: url)
     }

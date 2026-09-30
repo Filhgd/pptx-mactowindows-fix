@@ -380,7 +380,7 @@ struct FooterView: View {
 
     private var folderText: String {
         guard let f = model.watchFolder else {
-            return "Off. Presentations saved in a chosen folder are fixed within seconds."
+            return "Off: choose a folder to watch"
         }
         return (f.path as NSString).abbreviatingWithTildeInPath
     }
@@ -460,6 +460,7 @@ struct OnboardingView: View {
                 Spacer()
                 Button("Get Started") { model.onFinishOnboarding(openAtLogin) }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
                     .controlSize(.large)
             }
             .padding(.top, 14)
