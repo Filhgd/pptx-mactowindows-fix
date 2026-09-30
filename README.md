@@ -16,7 +16,7 @@ Yes, if you:
 
 When you paste a piece of a PDF into PowerPoint for Mac, PowerPoint saves two versions of it in the file: the original PDF, which is sharp at any size, and a small backup picture of only a few hundred pixels wide. Your Mac shows the sharp PDF. Windows cannot read that PDF, so it shows the small backup picture, enlarged to fit the slide. That is the pixelation you see.
 
-This app takes the sharp PDF that is already inside your file and turns it into a high-resolution picture (300 ppi at the size it appears on your slide) that Windows can show. Nothing is taken from the internet and nothing is uploaded: everything happens on your Mac.
+This app takes the sharp PDF that is already inside your file and turns it into a high-resolution picture (300 ppi at the size it appears on your slide) that Windows can show. Your presentations never leave your Mac: all the work happens locally. The only time the app goes online is a daily check for new versions (see Updates below).
 
 ## Installation
 
@@ -77,6 +77,14 @@ Keep working in your **original** file on your Mac. Use (or send) the **`_window
 **The watched folder does nothing.** Make sure the app is running (icon in the menu bar) and that it was allowed to access that folder (System Settings > Privacy & Security > Files and Folders). Files whose name ends in `_windows` are skipped on purpose.
 
 **An image is still blurry on Windows.** The app fixes images that were pasted from a PDF. A screenshot or photo that was already low-resolution cannot be made sharper. Images pasted from other Mac apps than a PDF viewer have not been tested.
+
+## Updates
+
+Once a day the app checks GitHub for a new version. It only reads the public release page; nothing about you or your files is sent. When a new version is available, you get a notification and an **Update Available** item appears at the top of the menu. From there you can see what's new and choose **Download**, **Later** or **Skip This Version**.
+
+To install an update: quit the app, unzip the download and replace the app in Applications.
+
+You can also choose **Check for Updates…** in the menu at any time, or turn off **Check for Updates Automatically**.
 
 ## Support
 

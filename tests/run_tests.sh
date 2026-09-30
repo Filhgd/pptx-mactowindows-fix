@@ -79,6 +79,47 @@ kill -0 "$pid" 2>/dev/null && echo "OK   app still running" || bad "app stopped"
 kill "$pid" 2>/dev/null
 defaults delete $DOMAIN 2>/dev/null || true
 
+step "update check: version comparison"
+cmp() { r=$("$BIN" --compare "$1" "$2"); [ "$r" = "$3" ] && echo "OK   $1 vs $2: $r" || bad "compare $1 vs $2 gave '$r', expected '$3'"; }
+cmp 1.1.0 1.0.1 newer
+cmp v1.10.0 1.9.9 newer
+cmp 2.0 1.99.99 newer
+cmp 1.0.9 1.1.0 "not newer"
+cmp 1.1 1.1.0 "not newer"
+cmp v1.1.0 1.1.0 "not newer"
+
+step "update check: a newer release"
+cat > "$OUT/release_new.json" <<'JSON'
+{"tag_name": "v9.9.9", "html_url": "https://github.com/Filhgd/pptx-mactowindows-fix/releases/tag/v9.9.9",
+ "body": "### New\n- **Faster** fixing\n- Update check",
+ "assets": [{"name": "PPTX-MacToWindows-Fix-macOS.zip", "browser_download_url": "https://example.com/PPTX-MacToWindows-Fix-macOS.zip"}]}
+JSON
+r=$(PPTXFIX_RELEASES_URL="file://$PWD/$OUT/release_new.json" "$BIN" --check-update); echo "$r"
+echo "$r" | grep -q "latest 9.9.9: update available" && echo "OK   update detected" || bad "newer release not detected"
+echo "$r" | grep -q "download: https://example.com/PPTX-MacToWindows-Fix-macOS.zip" && echo "OK   points to the zip" || bad "download link"
+echo "$r" | grep -q "• Faster fixing" && echo "OK   release notes cleaned up" || bad "release notes"
+
+step "update check: an older release"
+cat > "$OUT/release_old.json" <<'JSON'
+{"tag_name": "v1.0.0", "html_url": "https://github.com/Filhgd/pptx-mactowindows-fix/releases/tag/v1.0.0", "body": "", "assets": []}
+JSON
+r=$(PPTXFIX_RELEASES_URL="file://$PWD/$OUT/release_old.json" "$BIN" --check-update); echo "$r"
+echo "$r" | grep -q "up to date" && echo "OK   no update offered" || bad "older release offered as update"
+
+step "update check: real GitHub (information only)"
+"$BIN" --check-update || echo "WARN could not reach GitHub from the runner"
+
+step "update check: the running app finds an update by itself"
+DOMAIN=be.haegdorens.pptxmactowindowsfix
+defaults delete $DOMAIN 2>/dev/null || true
+defaults write $DOMAIN welcomeShown -bool true
+PPTXFIX_RELEASES_URL="file://$PWD/$OUT/release_new.json" "$BIN" & pid=$!
+for i in $(seq 1 40); do [ "$(defaults read $DOMAIN notifiedVersion 2>/dev/null)" = "9.9.9" ] && break; sleep 1; done
+[ "$(defaults read $DOMAIN notifiedVersion 2>/dev/null)" = "9.9.9" ] && echo "OK   update announced after ${i} s" || bad "automatic update check"
+[ -n "$(defaults read $DOMAIN lastUpdateCheck 2>/dev/null)" ] && echo "OK   check time saved (next check in a day)" || bad "lastUpdateCheck"
+kill "$pid" 2>/dev/null
+defaults delete $DOMAIN 2>/dev/null || true
+
 mkdir -p "$OUT/extracted"
 unzip -o -q "$OUT/fixed.pptx" 'ppt/media/*_hr.png' -d "$OUT/extracted" || true
 

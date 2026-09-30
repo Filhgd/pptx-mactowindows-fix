@@ -68,6 +68,30 @@ if args.count >= 3, args[1] == "--fix-all" {
     }
     exit(failures == 0 ? 0 : 1)
 }
+if args.count >= 3, args[1] == "--compare" {
+    // --compare CANDIDATE CURRENT: prints "newer" or "not newer" (used by the tests)
+    print(Updater.isNewer(args[2], than: args.count >= 4 ? args[3] : Updater.currentVersion) ? "newer" : "not newer")
+    exit(0)
+}
+if args.count >= 2, args[1] == "--check-update" {
+    let done = DispatchSemaphore(value: 0)
+    var code: Int32 = 0
+    Updater.fetchLatest { result in
+        switch result {
+        case .success(let r):
+            let newer = Updater.isNewer(r.version, than: Updater.currentVersion)
+            print("current \(Updater.currentVersion), latest \(r.version): " + (newer ? "update available" : "up to date"))
+            print("download: \(r.downloadURL?.absoluteString ?? r.pageURL.absoluteString)")
+            print("notes: " + Updater.plainNotes(r.notes).replacingOccurrences(of: "\n", with: " | "))
+        case .failure(let e):
+            print("error: \(e)")
+            code = 2
+        }
+        done.signal()
+    }
+    done.wait()
+    exit(code)
+}
 if args.count >= 2, args[1] == "--version" {
     print(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev")
     exit(0)
@@ -85,6 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var openedWithFiles = false
     private var lastResult = "Nothing fixed yet"
     private let defaults = UserDefaults.standard
+    private var availableUpdate: ReleaseInfo?
+    private var updateTimer: Timer?
 
     // Only touched on the work queue.
     private var skipped: [String: Double] = [:]   // path -> modification time of a version that needed nothing / failed
@@ -119,6 +145,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
         if let folder = watchFolder { startWatching(folder) }
 
+        // Daily update check: first shortly after launch, then re-evaluated every hour.
+        defaults.register(defaults: ["autoUpdateCheck": true])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.checkForUpdatesIfDue() }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.checkForUpdatesIfDue()
+        }
+
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if !self.defaults.bool(forKey: "welcomeShown") && !self.openedWithFiles { self.showWelcome() }
@@ -149,6 +182,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
+        if let update = availableUpdate {
+            let u = item("Update Available: Version \(update.version)…", #selector(showUpdateFromMenu))
+            u.attributedTitle = NSAttributedString(string: u.title, attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)])
+            menu.addItem(u)
+            menu.addItem(.separator())
+        }
         menu.addItem(info("Drop a presentation on the icon above"))
         menu.addItem(item("Fix Presentation…", #selector(chooseFiles)))
         menu.addItem(.separator())
@@ -166,6 +205,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
         menu.addItem(info("Last: \(lastResult)"))
+        menu.addItem(.separator())
+        menu.addItem(item("Check for Updates…", #selector(checkForUpdatesManually)))
+        let auto = item("Check for Updates Automatically", #selector(toggleAutoUpdate))
+        auto.state = defaults.bool(forKey: "autoUpdateCheck") ? .on : .off
+        menu.addItem(auto)
         menu.addItem(.separator())
         menu.addItem(item("Buy Me a Coffee…", #selector(buyCoffee)))
         menu.addItem(item("About \(appName)", #selector(about)))
@@ -263,6 +307,101 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let answer = a.runModal()
         if login.state == .on, SMAppService.mainApp.status != .enabled { try? SMAppService.mainApp.register() }
         if answer == .alertFirstButtonReturn { chooseFolder() }
+    }
+
+    // MARK: Updates
+
+    private func checkForUpdatesIfDue() {
+        guard defaults.bool(forKey: "autoUpdateCheck") else { return }
+        let last = defaults.double(forKey: "lastUpdateCheck")
+        guard Date().timeIntervalSince1970 - last > 20 * 3600 else { return }
+        Updater.fetchLatest { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard case .success(let release) = result else { return }   // silent: try again tomorrow
+                self.defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
+                guard Updater.isNewer(release.version, than: Updater.currentVersion),
+                      self.defaults.string(forKey: "skippedVersion") != release.version else {
+                    self.availableUpdate = nil
+                    return
+                }
+                self.availableUpdate = release
+                if self.defaults.string(forKey: "notifiedVersion") != release.version {
+                    self.defaults.set(release.version, forKey: "notifiedVersion")
+                    self.announceUpdate(release)
+                }
+            }
+        }
+    }
+
+    /// Notification when allowed; otherwise the dialog (once per version).
+    private func announceUpdate(_ release: ReleaseInfo) {
+        let center = UNUserNotificationCenter.current()
+        center.getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
+                    let content = UNMutableNotificationContent()
+                    content.title = "Update available"
+                    content.body = "\(appName) \(release.version) is available. Click to see what's new."
+                    content.userInfo = ["update": true]
+                    center.add(UNNotificationRequest(identifier: "update-\(release.version)", content: content, trigger: nil))
+                } else {
+                    self.showUpdateAlert(release)
+                }
+            }
+        }
+    }
+
+    @objc private func showUpdateFromMenu() {
+        if let u = availableUpdate { showUpdateAlert(u) }
+    }
+
+    @objc private func checkForUpdatesManually() {
+        Updater.fetchLatest { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let release):
+                    self.defaults.set(Date().timeIntervalSince1970, forKey: "lastUpdateCheck")
+                    if Updater.isNewer(release.version, than: Updater.currentVersion) {
+                        self.availableUpdate = release
+                        self.showUpdateAlert(release)
+                    } else {
+                        self.availableUpdate = nil
+                        self.alert("You're up to date", "\(appName) \(Updater.currentVersion) is the latest version.")
+                    }
+                case .failure(let error):
+                    self.alert("Could not check for updates", "\(error.localizedDescription)\n\nYou can also look at github.com/\(Updater.repository)/releases")
+                }
+            }
+        }
+    }
+
+    @objc private func toggleAutoUpdate() {
+        defaults.set(!defaults.bool(forKey: "autoUpdateCheck"), forKey: "autoUpdateCheck")
+    }
+
+    private func showUpdateAlert(_ release: ReleaseInfo) {
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "\(appName) \(release.version) is available"
+        var text = "You have version \(Updater.currentVersion)."
+        let notes = Updater.plainNotes(release.notes)
+        if !notes.isEmpty { text += "\n\nWhat's new:\n\(notes)" }
+        text += "\n\nTo install: quit this app, unzip the download and replace the app in Applications."
+        a.informativeText = text
+        a.addButton(withTitle: "Download")
+        a.addButton(withTitle: "Later")
+        a.addButton(withTitle: "Skip This Version")
+        switch a.runModal() {
+        case .alertFirstButtonReturn:
+            NSWorkspace.shared.open(release.downloadURL ?? release.pageURL)
+        case .alertThirdButtonReturn:
+            defaults.set(release.version, forKey: "skippedVersion")
+            availableUpdate = nil
+        default:
+            break
+        }
     }
 
     // MARK: Drag and drop on the menu bar icon
@@ -501,8 +640,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
-        if let path = response.notification.request.content.userInfo["path"] as? String {
+        let info = response.notification.request.content.userInfo
+        if let path = info["path"] as? String {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        } else if info["update"] as? Bool == true {
+            DispatchQueue.main.async { self.showUpdateFromMenu() }
         }
         completionHandler()
     }
