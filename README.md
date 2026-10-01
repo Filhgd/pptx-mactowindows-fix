@@ -129,3 +129,7 @@ Command line use: `"PPTX MacToWindows Fix.app/Contents/MacOS/PPTXFix" --fix in.p
 | `Sources/main.swift` | App logic: window, menu bar, watched folder, notifications, command line |
 | `Sources/Snapshots.swift` | Screenshots of the window for the tests |
 | `tests/` | Builds test presentations, checks the output and the app's behaviour |
+
+## License
+
+[MIT](LICENSE) © 2026 Filip Haegdorens. You may use, change and share this app and its code freely, as long as the copyright notice and license text are kept. The app comes without any warranty.
