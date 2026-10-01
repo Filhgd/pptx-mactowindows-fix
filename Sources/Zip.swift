@@ -57,9 +57,11 @@ struct ZipEntry {
 }
 
 enum ZipArchive {
-    /// Limits against zip bombs: real presentations stay far below these.
-    static let maxPartSize = 1 << 30        // uncompressed size of one part
-    static let maxTotalSize = 4 << 30       // uncompressed size of all parts together
+    /// Limit against zip bombs. Video and images are already compressed, so a real presentation
+    /// unpacks to about its own size; a bomb unpacks to hundreds of times its size.
+    /// Parts are unpacked one at a time, so this bounds work, not memory.
+    static let minTotalSize = 4 << 30       // always allowed, whatever the file size
+    static let maxRatio = 10                // beyond that, unpacked total may be this many times the file size
 
     static func read(_ bytes: [UInt8]) throws -> [ZipEntry] {
         let n = bytes.count
@@ -112,8 +114,8 @@ enum ZipArchive {
             let start = local + 30 + lName + lExtra
             guard start + csize <= n else { throw ZipError.corrupt("data of \(name)") }
             total += usize
-            guard usize <= maxPartSize, total <= maxTotalSize else {
-                throw ZipError.unsupported("parts over 1 GB or more than 4 GB unpacked in total")
+            guard total <= max(minTotalSize, maxRatio * n) else {
+                throw ZipError.unsupported("files that unpack to far more than their own size")
             }
             entries.append(ZipEntry(name: name, method: method, flags: flags, modTime: time, modDate: date,
                                     crc32: crc, uncompressedSize: usize, externalAttributes: ext, rawData: []))

@@ -53,11 +53,17 @@ count, size, off = struct.unpack("<HII", b[e + 10:e + 20])
 cd = b[off:off + size]
 eocd = b[e:e + 8] + struct.pack("<HHII", 2 * count, 2 * count, 2 * size, off) + b"\0\0"
 open(f"{out}/evil_overlap.pptx", "wb").write(b[:off] + cd + cd + eocd)
+# First part claims to unpack to about 4.3 GB: far more than the file itself.
+bomb = bytearray(b)
+bomb[off + 24:off + 28] = struct.pack("<I", 0xFFFF_FFF0)
+open(f"{out}/evil_bomb.pptx", "wb").write(bomb)
 PY
 "$BIN" --fix "$OUT/evil_cx.pptx" "$OUT/evil_cx_out.pptx"; code=$?
 [ $code -eq 0 ] && echo "OK   huge picture width handled" || bad "huge picture width: exit $code"
 r=$("$BIN" --fix "$OUT/evil_overlap.pptx" "$OUT/evil_overlap_out.pptx" 2>&1); echo "$r"
 echo "$r" | grep -q "overlapping parts" && echo "OK   overlapping parts refused" || bad "overlapping parts not refused"
+r=$("$BIN" --fix "$OUT/evil_bomb.pptx" "$OUT/evil_bomb_out.pptx" 2>&1); echo "$r"
+echo "$r" | grep -q "far more than their own size" && [ ! -e "$OUT/evil_bomb_out.pptx" ] && echo "OK   zip bomb refused" || bad "zip bomb not refused"
 rm -f "$OUT/evil_fifo.pptx"; mkfifo "$OUT/evil_fifo.pptx"
 perl -e 'alarm 10; exec @ARGV' "$BIN" --fix "$OUT/evil_fifo.pptx" "$OUT/evil_fifo_out.pptx"; code=$?
 [ $code -eq 1 ] && echo "OK   FIFO refused" || bad "FIFO: exit $code (142 = hung)"

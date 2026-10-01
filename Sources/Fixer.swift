@@ -25,7 +25,7 @@ enum PPTXFixer {
     static let targetPPI: Double = 300
     static let maxSidePx: Double = 5000
     static let emuPerInch: Double = 914_400
-    static let maxInputBytes = 1 << 30   // 1 GB: larger input files are refused
+    static let maxInputBytes = 0xFFFF_FFFF   // largest file without ZIP64, which is not supported
 
     /// Pasted PDF clips that Windows would show blurry. Empty = nothing to fix.
     static func findClips(in entries: [ZipEntry]) throws -> [String: [UInt8]] {
@@ -246,7 +246,7 @@ enum PPTXFixer {
         var st = stat()
         guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { throw FixError.notPresentation }
         let data = try handle.read(upToCount: maxInputBytes + 1) ?? Data()
-        guard data.count <= maxInputBytes else { throw ZipError.unsupported("files larger than 1 GB") }
+        guard data.count <= maxInputBytes else { throw ZipError.unsupported("ZIP64 files (larger than 4 GB)") }
         return [UInt8](data)
     }
 
