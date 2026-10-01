@@ -34,6 +34,21 @@ echo "hello" > "$OUT/bad.pptx"
 if "$BIN" --fix "$OUT/bad.pptx" "$OUT/bad_out.pptx"; then bad "accepted a broken file"; else echo "OK   refused"; fi
 [ ! -e "$OUT/bad_out.pptx" ] && echo "OK   nothing written" || bad "wrote output for a broken file"
 
+step "image at the 5000 px cap"
+# Picture on slide 1 made 24976468 EMU wide: scaling down to the cap gives 5000.000000000001, which must still work.
+python3 - "$OUT" <<'PY'
+import re, sys, zipfile
+out = sys.argv[1]
+with zipfile.ZipFile(f"{out}/mac_clip.pptx") as z, zipfile.ZipFile(f"{out}/wide.pptx", "w", zipfile.ZIP_DEFLATED) as w:
+    for i in z.infolist():
+        data = z.read(i)
+        if i.filename == "ppt/slides/slide1.xml":   # slide 2 shows it smaller, slide 3 another image
+            data = re.sub(rb'<a:ext cx="\d+"', b'<a:ext cx="24976468"', data)
+        w.writestr(i, data)
+PY
+"$BIN" --fix "$OUT/wide.pptx" "$OUT/wide_out.pptx" || bad "image at the cap: fix exited with an error"
+python3 tests/check_output.py "$OUT/wide.pptx" "$OUT/wide_out.pptx" 5000 > /dev/null && echo "OK   rendered at 5000 px" || bad "image at the cap: output checks"
+
 step "hostile files are refused without crashing or hanging"
 python3 - "$OUT" <<'PY'
 import re, struct, sys, zipfile

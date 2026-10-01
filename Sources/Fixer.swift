@@ -67,8 +67,9 @@ enum PPTXFixer {
             let longest = max(widthPx, widthPx * Double(size.height) / Double(size.width))
             if longest > maxSidePx { widthPx *= maxSidePx / longest }
             widthPx = max(widthPx, 16)
-            // Absurd sizes in the file can end up as infinity or NaN here.
-            guard widthPx.isFinite, widthPx <= maxSidePx else { throw FixError.imageFailed(path, RenderError.badPDF) }
+            // Absurd sizes in the file can end up as infinity or NaN here. No `<= maxSidePx` check:
+            // the scaling above can land a hair above it (5000.000000000001); Render refuses truly huge sizes.
+            guard widthPx.isFinite else { throw FixError.imageFailed(path, RenderError.badPDF) }
 
             let base = (path as NSString).deletingPathExtension
             var newPath = base + "_hr.png"
