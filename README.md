@@ -87,6 +87,8 @@ Keep working in your **original** file on your Mac. Use (or send) the **`_window
 
 **"Only PowerPoint presentations (.pptx) can be fixed."** The app works on .pptx files. Older .ppt files are not supported; open them in PowerPoint and save them as .pptx first.
 
+**"Not supported: …", "Damaged file: …" or "This is not a PowerPoint presentation (.pptx)."** The app refuses files it cannot open safely, and writes no copy for them: presentations larger than 1 GB, files that would unpack to more than 4 GB in total (or to a single part over 1 GB), damaged files whose parts overlap, and anything named .pptx that is not an ordinary file (such as a link to a device). Real presentations stay far below these limits.
+
 **An image is still blurry on Windows.** The app fixes images that were pasted from a PDF. A screenshot or photo that was already low-resolution cannot be made sharper. Images pasted from other Mac apps than a PDF viewer have not been tested.
 
 ## Updates

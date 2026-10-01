@@ -27,8 +27,11 @@ enum PDFRender {
         let size = displaySize(page)
         guard size.width > 0, size.height > 0 else { throw RenderError.badPDF }
         let scale = CGFloat(widthPx) / size.width
-        let w = max(1, Int((size.width * scale).rounded()))
-        let h = max(1, Int((size.height * scale).rounded()))
+        let wd = (size.width * scale).rounded(), hd = (size.height * scale).rounded()
+        // Extreme aspect ratios or sizes in the PDF: refuse instead of trapping or allocating gigabytes.
+        guard wd.isFinite, hd.isFinite, wd <= 20_000, hd <= 20_000 else { throw RenderError.badPDF }
+        let w = max(1, Int(wd))
+        let h = max(1, Int(hd))
 
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,

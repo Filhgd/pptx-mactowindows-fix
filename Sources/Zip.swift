@@ -57,6 +57,10 @@ struct ZipEntry {
 }
 
 enum ZipArchive {
+    /// Limits against zip bombs: real presentations stay far below these.
+    static let maxPartSize = 1 << 30        // uncompressed size of one part
+    static let maxTotalSize = 4 << 30       // uncompressed size of all parts together
+
     static func read(_ bytes: [UInt8]) throws -> [ZipEntry] {
         let n = bytes.count
         guard n >= 22 else { throw ZipError.notZip }
@@ -76,6 +80,9 @@ enum ZipArchive {
         }
 
         var entries: [ZipEntry] = []
+        var spans: [Range<Int>] = []        // local header + data of each entry
+        var dataRanges: [Range<Int>] = []
+        var total = 0
         var p = cdOffset
         for _ in 0..<count {
             guard p + 46 <= n, bytes.u32(p) == 0x02014b50 else { throw ZipError.corrupt("central directory") }
@@ -104,11 +111,22 @@ enum ZipArchive {
             let lExtra = Int(bytes.u16(local + 28))
             let start = local + 30 + lName + lExtra
             guard start + csize <= n else { throw ZipError.corrupt("data of \(name)") }
+            total += usize
+            guard usize <= maxPartSize, total <= maxTotalSize else {
+                throw ZipError.unsupported("parts over 1 GB or more than 4 GB unpacked in total")
+            }
             entries.append(ZipEntry(name: name, method: method, flags: flags, modTime: time, modDate: date,
-                                    crc32: crc, uncompressedSize: usize, externalAttributes: ext,
-                                    rawData: Array(bytes[start..<(start + csize)])))
+                                    crc32: crc, uncompressedSize: usize, externalAttributes: ext, rawData: []))
+            spans.append(local..<(start + csize))
+            dataRanges.append(start..<(start + csize))
             p += 46 + nameLen + extraLen + commentLen
         }
+        // Entries sharing bytes would let a small file unpack into a huge one; check before copying.
+        let sorted = spans.sorted { $0.lowerBound < $1.lowerBound }
+        for (a, b) in zip(sorted, sorted.dropFirst()) where b.lowerBound < a.upperBound {
+            throw ZipError.corrupt("overlapping parts")
+        }
+        for i in entries.indices { entries[i].rawData = Array(bytes[dataRanges[i]]) }
         return entries
     }
 

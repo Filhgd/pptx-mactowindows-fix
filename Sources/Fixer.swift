@@ -25,6 +25,7 @@ enum PPTXFixer {
     static let targetPPI: Double = 300
     static let maxSidePx: Double = 5000
     static let emuPerInch: Double = 914_400
+    static let maxInputBytes = 1 << 30   // 1 GB: larger input files are refused
 
     /// Pasted PDF clips that Windows would show blurry. Empty = nothing to fix.
     static func findClips(in entries: [ZipEntry]) throws -> [String: [UInt8]] {
@@ -38,7 +39,7 @@ enum PPTXFixer {
     /// Writes a fixed copy to `output`. Returns the images that were replaced;
     /// when that list is empty nothing was written.
     static func fix(input: URL, output: URL) throws -> [FixedImage] {
-        let bytes = [UInt8](try Data(contentsOf: input))
+        let bytes = try readInput(input)
         let entries = try ZipArchive.read(bytes)
         let names = Set(entries.map { $0.name })
         guard names.contains("[Content_Types].xml"), names.contains("ppt/presentation.xml") else {
@@ -66,6 +67,8 @@ enum PPTXFixer {
             let longest = max(widthPx, widthPx * Double(size.height) / Double(size.width))
             if longest > maxSidePx { widthPx *= maxSidePx / longest }
             widthPx = max(widthPx, 16)
+            // Absurd sizes in the file can end up as infinity or NaN here.
+            guard widthPx.isFinite, widthPx <= maxSidePx else { throw FixError.imageFailed(path, RenderError.badPDF) }
 
             let base = (path as NSString).deletingPathExtension
             var newPath = base + "_hr.png"
@@ -172,7 +175,7 @@ enum PPTXFixer {
                 guard let r = Range(m.range, in: xml) else { continue }
                 let pic = String(xml[r])
                 guard let rid = firstGroup(#"r:embed="([^"]+)""#, pic), let target = rels[rid],
-                      let cx = firstGroup(#"<a:ext cx="(\d+)""#, pic).flatMap(Double.init) else { continue }
+                      let cx = firstGroup(#"<a:ext cx="(\d+)""#, pic).flatMap(Double.init), cx.isFinite, cx > 0 else { continue }
                 var visible = 1.0
                 if let crop = firstGroup(#"<a:srcRect([^>]*)>"#, pic) {
                     let l = firstGroup(#"\bl="(-?\d+)""#, crop).flatMap(Double.init) ?? 0
@@ -180,6 +183,7 @@ enum PPTXFixer {
                     visible = max(0.05, 1 - (l + rr) / 100_000)
                 }
                 let inches = cx / emuPerInch / visible
+                guard inches.isFinite, inches > 0 else { continue }
                 widths[target] = max(widths[target] ?? 0, inches)
             }
         }
@@ -233,6 +237,18 @@ enum PPTXFixer {
     }
 
     // MARK: - Helpers
+
+    /// Reads the presentation. Only regular files up to `maxInputBytes`: a FIFO or device named .pptx would block or never end.
+    static func readInput(_ url: URL) throws -> [UInt8] {
+        let fd = open(url.path, O_RDONLY | O_NONBLOCK)   // O_NONBLOCK: opening a FIFO must not hang
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { throw FixError.notPresentation }
+        let data = try handle.read(upToCount: maxInputBytes + 1) ?? Data()
+        guard data.count <= maxInputBytes else { throw ZipError.unsupported("files larger than 1 GB") }
+        return [UInt8](data)
+    }
 
     static func relsBaseDir(_ relsPath: String) -> String {
         // "ppt/slides/_rels/slide1.xml.rels" -> "ppt/slides/"; "_rels/.rels" -> ""
