@@ -57,6 +57,12 @@ struct ZipEntry {
 }
 
 enum ZipArchive {
+    /// Limit against zip bombs. Video and images are already compressed, so a real presentation
+    /// unpacks to about its own size; a bomb unpacks to hundreds of times its size.
+    /// Parts are unpacked one at a time, so this bounds work, not memory.
+    static let minTotalSize = 4 << 30       // always allowed, whatever the file size
+    static let maxRatio = 10                // beyond that, unpacked total may be this many times the file size
+
     static func read(_ bytes: [UInt8]) throws -> [ZipEntry] {
         let n = bytes.count
         guard n >= 22 else { throw ZipError.notZip }
@@ -76,6 +82,9 @@ enum ZipArchive {
         }
 
         var entries: [ZipEntry] = []
+        var spans: [Range<Int>] = []        // local header + data of each entry
+        var dataRanges: [Range<Int>] = []
+        var total = 0
         var p = cdOffset
         for _ in 0..<count {
             guard p + 46 <= n, bytes.u32(p) == 0x02014b50 else { throw ZipError.corrupt("central directory") }
@@ -104,11 +113,22 @@ enum ZipArchive {
             let lExtra = Int(bytes.u16(local + 28))
             let start = local + 30 + lName + lExtra
             guard start + csize <= n else { throw ZipError.corrupt("data of \(name)") }
+            total += usize
+            guard total <= max(minTotalSize, maxRatio * n) else {
+                throw ZipError.unsupported("files that unpack to far more than their own size")
+            }
             entries.append(ZipEntry(name: name, method: method, flags: flags, modTime: time, modDate: date,
-                                    crc32: crc, uncompressedSize: usize, externalAttributes: ext,
-                                    rawData: Array(bytes[start..<(start + csize)])))
+                                    crc32: crc, uncompressedSize: usize, externalAttributes: ext, rawData: []))
+            spans.append(local..<(start + csize))
+            dataRanges.append(start..<(start + csize))
             p += 46 + nameLen + extraLen + commentLen
         }
+        // Entries sharing bytes would let a small file unpack into a huge one; check before copying.
+        let sorted = spans.sorted { $0.lowerBound < $1.lowerBound }
+        for (a, b) in zip(sorted, sorted.dropFirst()) where b.lowerBound < a.upperBound {
+            throw ZipError.corrupt("overlapping parts")
+        }
+        for i in entries.indices { entries[i].rawData = Array(bytes[dataRanges[i]]) }
         return entries
     }
 
